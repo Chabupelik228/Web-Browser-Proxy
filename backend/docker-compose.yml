@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: scramjet-db
+    restart: always
+    environment:
+      POSTGRES_USER: scramjet_user
+      POSTGRES_PASSWORD: yeQMehBy+HQxDnSpT6gSlac4JFLrYltKQxQgCLNa6w4=
+      POSTGRES_DB: scramjet_db
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: scramjet-redis
+    restart: always
+
+  scramjet:
+    build:
+      context: ../  # Меняем контекст на корень проекта, чтобы Docker видел обе папки
+      dockerfile: backend/Dockerfile # Указываем путь к нашему Dockerfile
+    container_name: scramjet-proxy
+    ports:
+      - "127.0.0.1:9000:8080"
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+  bot:
+    build: ../telegram_bot # Путь к папке бота относительно папки backend
+    container_name: scramjet-bot
+    env_file:
+      - ../telegram_bot/.env
+    depends_on:
+      - scramjet
+    restart: always
+
+volumes:
+  pgdata:

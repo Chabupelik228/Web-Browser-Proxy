@@ -1,0 +1,16 @@
+node_modules
+.DS_Store
+scramjet/
+# Зависимости
+.pnpm-store/
+
+# Сборка
+dist/
+build/
+.vite/
+
+# Логи и окружение
+*.log
+.env
+.env.local
+.DS_Store
