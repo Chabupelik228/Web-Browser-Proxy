@@ -1,4 +1,3 @@
-<!-- frontend/src/views/BrowserView.vue -->
 <template>
   <div class="flex flex-col h-full bg-[#0f0f11] text-zinc-200 select-none font-sans">
     
@@ -15,7 +14,7 @@
           <!-- Спиннер загрузки -->
           <div v-if="tab.isLoading" class="w-3 h-3 border-2 border-zinc-400 border-t-transparent rounded-full animate-spin flex-shrink-0"></div>
           
-          <!-- Аватарка сайта (Favicon) -->
+          <!-- Аватарка сайта (Проксируется через Scramjet для обхода CORS/COEP) -->
           <img 
             v-else-if="getTabFavicon(tab)" 
             :src="getTabFavicon(tab)" 
@@ -60,30 +59,15 @@
     <!-- 2. АДРЕСНАЯ СТРОКА С НАВИГАЦИЕЙ -->
     <div class="flex items-center space-x-1.5 bg-[#1c1c20] p-2 border-b border-zinc-800/80">
       
-      <!-- Назад -->
-      <button 
-        @click="goBack" 
-        class="p-1.5 text-zinc-400 hover:text-zinc-100 rounded-md hover:bg-zinc-800 transition-colors"
-        title="Назад"
-      >
+      <button @click="goBack" class="p-1.5 text-zinc-400 hover:text-zinc-100 rounded-md hover:bg-zinc-800 transition-colors" title="Назад">
         <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
       </button>
 
-      <!-- Вперед -->
-      <button 
-        @click="goForward" 
-        class="p-1.5 text-zinc-400 hover:text-zinc-100 rounded-md hover:bg-zinc-800 transition-colors"
-        title="Вперед"
-      >
+      <button @click="goForward" class="p-1.5 text-zinc-400 hover:text-zinc-100 rounded-md hover:bg-zinc-800 transition-colors" title="Вперед">
         <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>
       </button>
 
-      <!-- Обновить -->
-      <button 
-        @click="reloadCurrentTab" 
-        class="p-1.5 text-zinc-400 hover:text-zinc-100 rounded-md hover:bg-zinc-800 transition-colors"
-        title="Обновить"
-      >
+      <button @click="reloadCurrentTab" class="p-1.5 text-zinc-400 hover:text-zinc-100 rounded-md hover:bg-zinc-800 transition-colors" title="Обновить">
         <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
       </button>
       
@@ -110,11 +94,7 @@
       <template v-for="tab in browserStore.tabs" :key="tab.id">
         
         <!-- А) СТАРТОВАЯ СТРАНИЦА -->
-        <div 
-          v-if="isStartPage(tab)" 
-          v-show="tab.id === browserStore.activeTabId"
-          class="w-full h-full flex flex-col items-center justify-center bg-[#0f0f11] px-4"
-        >
+        <div v-if="isStartPage(tab)" v-show="tab.id === browserStore.activeTabId" class="w-full h-full flex flex-col items-center justify-center bg-[#0f0f11] px-4">
           <div class="flex flex-col items-center mb-10">
             <div class="flex items-center space-x-2">
               <span class="text-3xl font-semibold tracking-tight text-zinc-100">Chabupelik</span>
@@ -132,28 +112,14 @@
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                 </svg>
               </span>
-              <input 
-                v-model="startPageInput"
-                type="text" 
-                placeholder="Поиск в сети или введите адрес..."
-                class="w-full bg-transparent text-zinc-200 placeholder-zinc-600 text-xs focus:outline-none px-2 py-1"
-                autofocus
-              />
-              <button 
-                type="submit" 
-                class="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium text-xs px-3.5 py-1.5 rounded transition-colors ml-1 border border-zinc-700/50"
-              >
+              <input v-model="startPageInput" type="text" placeholder="Поиск в сети или введите адрес..." class="w-full bg-transparent text-zinc-200 placeholder-zinc-600 text-xs focus:outline-none px-2 py-1" autofocus />
+              <button type="submit" class="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium text-xs px-3.5 py-1.5 rounded transition-colors ml-1 border border-zinc-700/50">
                 Поиск
               </button>
             </form>
 
             <div class="grid grid-cols-6 gap-3 mt-8">
-              <button 
-                v-for="bookmark in quickBookmarks" 
-                :key="bookmark.name"
-                @click="openUrlInTab(tab.id, bookmark.url)"
-                class="flex flex-col items-center justify-center p-3 rounded-lg bg-[#141417] hover:bg-[#1a1a1e] border border-zinc-800/80 hover:border-zinc-700 transition-all group"
-              >
+              <button v-for="bookmark in quickBookmarks" :key="bookmark.name" @click="openUrlInTab(tab.id, bookmark.url)" class="flex flex-col items-center justify-center p-3 rounded-lg bg-[#141417] hover:bg-[#1a1a1e] border border-zinc-800/80 hover:border-zinc-700 transition-all group">
                 <div class="w-7 h-7 flex items-center justify-center mb-2 text-zinc-400 group-hover:text-zinc-100 transition-colors">
                   <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
                     <path :d="bookmark.iconPath" />
@@ -165,7 +131,7 @@
           </div>
         </div>
 
-        <!-- Б) IFRAME ПРОКСИ (ЛЕЗИ-ЗАГРУЗКА: ТОЛЬКО ПО КЛИКУ) -->
+        <!-- Б) IFRAME ПРОКСИ -->
         <template v-else>
           <iframe 
             v-if="loadedTabIds.has(tab.id)"
@@ -194,19 +160,18 @@ const browserStore = useBrowserStore();
 const inputUrl = ref('');
 const startPageInput = ref('');
 const failedFavicons = ref(new Set());
-
-// Набор ID открывавшихся вкладок
 const loadedTabIds = ref(new Set());
 
 watch(() => browserStore.activeTabId, (newId) => {
-  if (newId) {
-    loadedTabIds.value.add(newId);
+  if (newId) loadedTabIds.value.add(newId);
+  const activeTab = browserStore.tabs.find(t => t.id === newId);
+  if (activeTab) {
+    inputUrl.value = activeTab.url || '';
+    startPageInput.value = '';
   }
 }, { immediate: true });
 
-const isStartPage = (tab) => {
-  return !tab.url || tab.url === '' || tab.url === 'about:blank';
-};
+const isStartPage = (tab) => !tab.url || tab.url === '' || tab.url === 'about:blank';
 
 const quickBookmarks = [
   { name: 'YouTube', url: 'https://youtube.com', iconPath: 'M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z' },
@@ -217,17 +182,9 @@ const quickBookmarks = [
   { name: 'GitHub', url: 'https://github.com', iconPath: 'M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z' }
 ];
 
-watch(() => browserStore.activeTabId, (newId) => {
-  const activeTab = browserStore.tabs.find(t => t.id === newId);
-  if (activeTab) {
-    inputUrl.value = activeTab.url || '';
-    startPageInput.value = '';
-  }
-}, { immediate: true });
-
+// Вспомогательные методы
 const buildProxyUrl = (url) => {
   if (!url || url === 'about:blank' || url.trim() === '') return '';
-  
   try {
     if (window.scramjet && typeof window.scramjet.encodeUrl === 'function') {
       return window.scramjet.encodeUrl(url);
@@ -235,29 +192,99 @@ const buildProxyUrl = (url) => {
     if (window.__scramjet$config && typeof window.__scramjet$config.encodeUrl === 'function') {
       return window.__scramjet$config.prefix + window.__scramjet$config.encodeUrl(url);
     }
-  } catch (e) {
-    console.warn('[Scramjet] Не удалось кодировать URL:', url, e);
-  }
-
-  // Безопасный фоллбек (гарантирует, что Vue НЕ упадет)
+  } catch (e) {}
   return '/service/' + encodeURIComponent(url);
+};
+
+// Функция 1: ВОССТАНОВЛЕНА ДЛЯ ИЗБЕЖАНИЯ ОШИБКИ В КОНСОЛИ
+const decodeProxyUrl = (proxiedPath) => {
+  if (!proxiedPath || !proxiedPath.includes('/service/')) return null;
+  try {
+    const encoded = proxiedPath.split('/service/')[1];
+    if (!encoded) return null;
+    if (window.scramjet && typeof window.scramjet.decodeUrl === 'function') {
+      return window.scramjet.decodeUrl(encoded);
+    }
+    if (window.__scramjet$config && typeof window.__scramjet$config.decodeUrl === 'function') {
+      return window.__scramjet$config.decodeUrl(encoded);
+    }
+  } catch (e) {}
+  return null;
+};
+
+const encodeXor = (str) => {
+  if (!str) return str;
+  return encodeURIComponent(encodeURIComponent(str).split('').map((char, ind) => ind % 2 ? String.fromCharCode(char.charCodeAt(0) ^ 2) : char).join(''));
+};
+
+const decodeXor = (str) => {
+  if (!str) return str;
+  let [input, ...search] = str.split('?');
+  try {
+    let decoded = decodeURIComponent(input).split('').map((char, ind) => ind % 2 ? String.fromCharCode(char.charCodeAt(0) ^ 2) : char).join('');
+    return decodeURIComponent(decoded) + (search.length ? '?' + search.join('?') : '');
+  } catch (e) { return str; }
+};
+
+// Функция 2: ФОРМАТИРОВАНИЕ YOUTUBE ССЫЛОК ДЛЯ ЗАЩИТЫ ОТ STATUS_BREAKPOINT
+const formatYouTubeUrl = (urlStr) => {
+  if (!urlStr) return urlStr;
+  try {
+    if (urlStr.includes('youtube.com') || urlStr.includes('youtu.be')) {
+      return urlStr
+        .replace(/(www\.)?youtube\.com/, 'm.youtube.com')
+        .replace('youtu.be/', 'm.youtube.com/watch?v=');
+    }
+  } catch(e) {}
+  return urlStr;
+};
+
+// Функция 3: СИНХРОНИЗАЦИЯ АДРЕСА ВО ВРЕМЯ КЛИКОВ ПО ЮТУБУ (И ВООБЩЕ ПО SPA)
+const syncTabLocation = (iframe, tab) => {
+  try {
+    if (!iframe || !iframe.contentWindow) return;
+    const proxiedPath = iframe.contentWindow.location.pathname + iframe.contentWindow.location.search;
+    const realUrl = decodeProxyUrl(proxiedPath);
+    
+    if (realUrl && /^https?:\/\//i.test(realUrl) && realUrl !== tab.url) {
+      tab.url = realUrl;
+      if (tab.id === browserStore.activeTabId) inputUrl.value = realUrl;
+      
+      if (!tab.history) tab.history = [];
+      if (tab.history[tab.historyIndex] !== realUrl) {
+        tab.history = tab.history.slice(0, (tab.historyIndex ?? -1) + 1);
+        tab.history.push(realUrl);
+        tab.historyIndex = tab.history.length - 1;
+      }
+    }
+  } catch (e) {}
 };
 
 const goBack = () => {
   const iframe = document.getElementById(`iframe-${browserStore.activeTabId}`);
   if (iframe && iframe.contentWindow) {
-    try {
-      iframe.contentWindow.history.back();
-    } catch (e) {}
+    try { iframe.contentWindow.history.back(); } catch (e) {}
+  }
+  const tab = browserStore.tabs.find(t => t.id === browserStore.activeTabId);
+  if (tab && tab.history && tab.historyIndex > 0) {
+    tab.historyIndex--;
+    const prevUrl = tab.history[tab.historyIndex];
+    tab.url = prevUrl;
+    inputUrl.value = prevUrl;
   }
 };
 
 const goForward = () => {
   const iframe = document.getElementById(`iframe-${browserStore.activeTabId}`);
   if (iframe && iframe.contentWindow) {
-    try {
-      iframe.contentWindow.history.forward();
-    } catch (e) {}
+    try { iframe.contentWindow.history.forward(); } catch (e) {}
+  }
+  const tab = browserStore.tabs.find(t => t.id === browserStore.activeTabId);
+  if (tab && tab.history && tab.historyIndex < tab.history.length - 1) {
+    tab.historyIndex++;
+    const nextUrl = tab.history[tab.historyIndex];
+    tab.url = nextUrl;
+    inputUrl.value = nextUrl;
   }
 };
 
@@ -283,14 +310,27 @@ const processNavigation = (tabId, targetUrl) => {
     url = `https://duckduckgo.com/?q=${encodeURIComponent(url)}`;
   }
 
+  // Применяем защиту от краша YouTube
+  url = formatYouTubeUrl(url);
+
   const tab = browserStore.tabs.find(t => t.id === tabId);
   if (tab) {
     tab.isLoading = true;
     tab.url = url;
     tab.title = extractHostname(url);
     loadedTabIds.value.add(tabId);
+
+    if (!tab.history) tab.history = [];
+    if (tab.history[tab.historyIndex] !== url) {
+      tab.history = tab.history.slice(0, (tab.historyIndex ?? -1) + 1);
+      tab.history.push(url);
+      tab.historyIndex = tab.history.length - 1;
+    }
   }
-  inputUrl.value = url;
+
+  if (tabId === browserStore.activeTabId) {
+    inputUrl.value = url;
+  }
 };
 
 const addNewTab = () => {
@@ -306,6 +346,69 @@ const reloadCurrentTab = () => {
   }
 };
 
+// Функция 4: ВНЕДРЕНИЕ ПЕРЕХВАТЧИКА ВНУТРЬ IFRAME (Для кликов и пуш-стейтов)
+const setupNewWindowInterceptor = (iframe, tab) => {
+  try {
+    if (!iframe.contentWindow) return;
+
+    if (iframe.contentWindow.history) {
+      const origPush = iframe.contentWindow.history.pushState;
+      iframe.contentWindow.history.pushState = function (...args) {
+        const res = origPush.apply(this, args);
+        setTimeout(() => syncTabLocation(iframe, tab), 50);
+        return res;
+      };
+
+      const origReplace = iframe.contentWindow.history.replaceState;
+      iframe.contentWindow.history.replaceState = function (...args) {
+        const res = origReplace.apply(this, args);
+        setTimeout(() => syncTabLocation(iframe, tab), 50);
+        return res;
+      };
+    }
+
+    iframe.contentWindow.addEventListener('popstate', () => {
+      setTimeout(() => syncTabLocation(iframe, tab), 50);
+    });
+
+    iframe.contentWindow.open = function (url) {
+      if (url) {
+        const proxiedPath = typeof url === 'string' && url.startsWith('http') ? url : (iframe.contentWindow.location.origin + url);
+        let realUrl = decodeProxyUrl(proxiedPath) || url;
+        realUrl = formatYouTubeUrl(realUrl);
+        browserStore.addTab(realUrl);
+      }
+      return null;
+    };
+
+    if (iframe.contentDocument) {
+      iframe.contentDocument.addEventListener('click', (e) => {
+        const link = e.target.closest('a');
+        if (link) {
+          const href = link.href;
+          let realUrl = decodeProxyUrl(href) || href;
+
+          if (link.target === '_blank' || link.target === '_new') {
+            e.preventDefault();
+            realUrl = formatYouTubeUrl(realUrl);
+            browserStore.addTab(realUrl);
+            return;
+          }
+
+          // Анти-краш если кликаем на ютуб из поисковика
+          if (realUrl && realUrl.includes('youtube.com') && !realUrl.includes('m.youtube.com') && !realUrl.includes('youtube-nocookie.com')) {
+            e.preventDefault();
+            realUrl = formatYouTubeUrl(realUrl);
+            iframe.src = buildProxyUrl(realUrl);
+            return;
+          }
+        }
+        setTimeout(() => syncTabLocation(iframe, tab), 150);
+      }, true);
+    }
+  } catch (e) {}
+};
+
 const onFrameLoad = (tabId) => {
   const tab = browserStore.tabs.find(t => t.id === tabId);
   if (!tab) return;
@@ -319,61 +422,32 @@ const onFrameLoad = (tabId) => {
       setupNewWindowInterceptor(iframe, tab);
       syncTabLocation(iframe, tab);
 
-      // 1. ДОСТАЕМ НАСТОЯЩУЮ ИКОНКУ ПРЯМО ИЗ HTML САЙТА (<link rel="icon">)
-      const iconTag = iframe.contentDocument.querySelector("link[rel*='icon']");
-      if (iconTag && iconTag.href) {
-        // Эта ссылка внутри iframe УЖЕ проксирована Scramjet, используем её напрямую!
-        tab.faviconUrl = iconTag.href;
-      } else {
-        // Запасной вариант: забираем /favicon.ico прямо с самого сайта
-        const host = extractHostname(tab.url);
-        if (host) {
-          tab.faviconUrl = buildProxyUrl(`https://${host}/favicon.ico`);
-        }
-      }
-
-      // 2. Читаем заголовок страницы
       if (iframe.contentDocument.title) {
         tab.title = iframe.contentDocument.title;
       }
     }
-  } catch (e) {
-    // В случае строгой CORS политики на всякий случай генерируем прямой /favicon.ico сайта
-    const host = extractHostname(tab.url);
-    if (host) {
-      tab.faviconUrl = buildProxyUrl(`https://${host}/favicon.ico`);
-    }
-  }
+  } catch (e) {}
 };
 
-const getTabTitle = (tab) => {
-  if (isStartPage(tab)) return 'Новая вкладка';
-  return tab.title || extractHostname(tab.url);
-};
-
+// Забор иконок (Проксируется через Scramjet для обхода CORS)
 const getTabFavicon = (tab) => {
   if (isStartPage(tab) || failedFavicons.value.has(tab.id)) return null;
-  
-  // 1. Если мы вытащили родную иконку из <head> сайта — показываем её
-  if (tab.faviconUrl) {
-    return tab.faviconUrl;
-  }
-
-  // 2. Запасной забор /favicon.ico с самого сайта через прокси
   try {
     const host = extractHostname(tab.url);
     if (!host || host.length < 3) return null;
-    return buildProxyUrl(`https://${host}/favicon.ico`);
+    return buildProxyUrl(`https://www.google.com/s2/favicons?domain=${host}&sz=32`);
   } catch (e) {
     return null;
   }
 };
 
-// Если иконка не загрузилась с первого раза — мгновенно переключаемся на SVG
 const onFaviconError = (event, tab) => {
-  if (tab && tab.id) {
-    failedFavicons.value.add(tab.id);
-  }
+  if (tab && tab.id) failedFavicons.value.add(tab.id);
+};
+
+const getTabTitle = (tab) => {
+  if (isStartPage(tab)) return 'Новая вкладка';
+  return tab.title || extractHostname(tab.url);
 };
 
 const extractHostname = (urlStr) => {
