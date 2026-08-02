@@ -80,5 +80,16 @@ export const useBrowserStore = defineStore('browser', () => {
     }
   };
 
-  return { tabs, activeTabId, addTab, closeTab, setActiveTab, clearUserSession };
+  const restoreTabs = (savedTabs) => {
+    if (!Array.isArray(savedTabs) || savedTabs.length === 0) return;
+    tabs.value = savedTabs.map(t => ({
+      id: generateTabId(),
+      url: t.url || '',
+      title: t.title || 'Новая вкладка',
+      isLoading: false,
+    }));
+    activeTabId.value = tabs.value[0].id;
+  };
+
+  return { tabs, activeTabId, addTab, closeTab, setActiveTab, clearUserSession, restoreTabs };
 });

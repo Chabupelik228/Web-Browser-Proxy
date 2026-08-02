@@ -219,13 +219,23 @@ function ensureFrame(tab, container) {
 
   frame.addEventListener('urlchange', (e) => {
     if (!e.url) return;
-    const url = e.url.toString();
-    tab.url = url;
-    tab.title = extractHostname(url);
-    tab.isLoading = false;
-    if (tab.id === browserStore.activeTabId) inputUrl.value = url;
+    const rawUrl = e.url.toString();
 
-    pushHistory(tab, url); // фиксируем в СВОЮ историю, не полагаемся на iframe history
+    // Если что-то — клик внутри страницы, серверный редирект,
+    // цепочка consent.youtube.com и т.п. — увело на десктопный домен,
+    // сразу же перенаправляем обратно на мобильный.
+    const corrected = normalizeUrl(rawUrl);
+    if (corrected !== rawUrl) {
+      frame.go(corrected);
+      return; // ждём следующий urlchange уже с правильным адресом
+    }
+
+    tab.url = rawUrl;
+    tab.title = extractHostname(rawUrl);
+    tab.isLoading = false;
+    if (tab.id === browserStore.activeTabId) inputUrl.value = rawUrl;
+
+    pushHistory(tab, rawUrl);
   });
 
   scramjetFrames.set(tab.id, frame);
@@ -239,6 +249,39 @@ const buildProxyUrl = (url) => {
   }
   return '';
 };
+
+const MOBILE_W = 414;
+const MOBILE_H = 896;
+const frameResizeObservers = new Map(); // tabId -> ResizeObserver
+
+function applyMobileEmulation(frame, container, tabId) {
+  const resize = () => {
+    const w = container.clientWidth;
+    const h = container.clientHeight;
+    if (!w || !h) return; // контейнер ещё не размерен, ждём следующий вызов
+
+    const scale = w / MOBILE_W;
+    frame.frame.style.width = `${MOBILE_W}px`;
+    frame.frame.style.height = `${h / scale}px`;
+    frame.frame.style.transformOrigin = 'top left';
+    frame.frame.style.transform = `scale(${scale})`;
+  };
+
+  resize();
+
+  if (frameResizeObservers.has(tabId)) {
+    frameResizeObservers.get(tabId).disconnect();
+  }
+  const ro = new ResizeObserver(resize);
+  ro.observe(container);
+  frameResizeObservers.set(tabId, ro);
+}
+
+function clearFrameSizing(frame) {
+  frame.frame.style.transform = '';
+  frame.frame.style.width = '100%';
+  frame.frame.style.height = '100%';
+}
 
 const processNavigation = async (tabId, targetUrl) => {
   let url = targetUrl.trim();
@@ -266,7 +309,18 @@ const processNavigation = async (tabId, targetUrl) => {
   const frame = ensureFrame(tab, container);
   if (!frame) return;
 
-  pushHistory(tab, url); // добавили сюда явный переход тоже
+  const isYouTube = /(^|\.)youtube\.com$/.test(new URL(url).hostname);
+  if (isYouTube) {
+    applyMobileEmulation(frame, container, tabId);
+  } else {
+    clearFrameSizing(frame);
+    if (frameResizeObservers.has(tabId)) {
+      frameResizeObservers.get(tabId).disconnect();
+      frameResizeObservers.delete(tabId);
+    }
+  }
+
+  pushHistory(tab, url);
   frame.go(url);
 };
 
@@ -308,7 +362,13 @@ const addNewTab = () => {
 
 watch(() => browserStore.tabs.map(t => t.id), (newIds) => {
   for (const id of scramjetFrames.keys()) {
-    if (!newIds.includes(id)) scramjetFrames.delete(id);
+    if (!newIds.includes(id)) {
+      scramjetFrames.delete(id);
+      if (frameResizeObservers.has(id)) {
+        frameResizeObservers.get(id).disconnect();
+        frameResizeObservers.delete(id);
+      }
+    }
   }
 });
 
@@ -326,13 +386,16 @@ const getTabFavicon = (tab) => {
 
 const normalizeUrl = (urlStr) => {
   try {
-    if (/(^|\.)youtube\.com$/.test(new URL(urlStr).hostname) || urlStr.includes('youtu.be')) {
-      return urlStr
-        .replace(/(www\.)?youtube\.com/, 'm.youtube.com')
-        .replace('youtu.be/', 'm.youtube.com/watch?v=');
+    const u = new URL(urlStr);
+    if (u.hostname === 'youtube.com' || u.hostname === 'www.youtube.com') {
+      u.hostname = 'm.youtube.com';
+      return u.toString();
+    }
+    if (u.hostname === 'youtu.be') {
+      return `https://m.youtube.com/watch?v=${u.pathname.slice(1)}${u.search}`;
     }
   } catch (e) {}
-  return urlStr;
+  return urlStr; // m.youtube.com и всё остальное — без изменений
 };
 
 const onFaviconError = (event, tab) => {
