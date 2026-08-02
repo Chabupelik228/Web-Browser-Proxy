@@ -12,9 +12,12 @@ export const useBrowserStore = defineStore('browser', () => {
     return `chabupelik_${username}_${key}`;
   };
 
+  let tabIdCounter = 0;
+  const generateTabId = () => `${Date.now()}_${tabIdCounter++}`;
+
   const loadSavedTabs = () => {
     const saved = localStorage.getItem(getUserKey('tabs'));
-    return saved ? JSON.parse(saved) : [{ id: Date.now(), url: '', title: 'Новая вкладка' }];
+    return saved ? JSON.parse(saved) : [{ id: generateTabId(), url: '', title: 'Новая вкладка' }];
   };
 
   const loadSavedActiveId = () => {
@@ -35,7 +38,7 @@ export const useBrowserStore = defineStore('browser', () => {
   });
 
   const addTab = (url = '') => {
-    const newTab = { id: Date.now(), url, title: 'Новая вкладка', isLoading: false };
+    const newTab = { id: generateTabId(), url, title: 'Новая вкладка', isLoading: false };
     tabs.value.push(newTab);
     activeTabId.value = newTab.id;
   };
@@ -43,9 +46,9 @@ export const useBrowserStore = defineStore('browser', () => {
   const closeTab = (id) => {
     const index = tabs.value.findIndex(t => t.id === id);
     if (index === -1) return;
-    
+
     tabs.value.splice(index, 1);
-    
+
     if (tabs.value.length === 0) {
       addTab('');
     } else if (activeTabId.value === id) {
@@ -62,9 +65,9 @@ export const useBrowserStore = defineStore('browser', () => {
     // 1. Очищаем сохраненные вкладки в localStorage
     localStorage.removeItem(getUserKey('tabs'));
     localStorage.removeItem(getUserKey('active_tab'));
-    
+
     // 2. Сбрасываем вкладки в памяти
-    tabs.value = [{ id: Date.now(), url: '', title: 'Новая вкладка' }];
+    tabs.value = [{ id: generateTabId(), url: '', title: 'Новая вкладка' }];
     activeTabId.value = tabs.value[0].id;
 
     // 3. Полностью удаляем куки и сессии сайтов из IndexedDB

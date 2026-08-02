@@ -133,14 +133,11 @@
 
         <!-- Б) IFRAME ПРОКСИ -->
         <template v-else>
-          <iframe 
-            v-if="loadedTabIds.has(tab.id)"
+          <div
+            :id="`frame-container-${tab.id}`"
             v-show="tab.id === browserStore.activeTabId"
-            :src="buildProxyUrl(tab.url)"
-            :id="`iframe-${tab.id}`"
-            class="w-full h-full border-none absolute inset-0 bg-white"
-            @load="onFrameLoad(tab.id)"
-          ></iframe>
+            class="w-full h-full relative overflow-hidden bg-white"
+          ></div>
         </template>
 
       </template>
@@ -150,7 +147,7 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue';
+import { ref, watch, nextTick } from 'vue';
 import { useAuthStore } from '../stores/auth.store';
 import { useBrowserStore } from '../stores/browser.store';
 
@@ -160,10 +157,8 @@ const browserStore = useBrowserStore();
 const inputUrl = ref('');
 const startPageInput = ref('');
 const failedFavicons = ref(new Set());
-const loadedTabIds = ref(new Set());
 
 watch(() => browserStore.activeTabId, (newId) => {
-  if (newId) loadedTabIds.value.add(newId);
   const activeTab = browserStore.tabs.find(t => t.id === newId);
   if (activeTab) {
     inputUrl.value = activeTab.url || '';
@@ -182,112 +177,6 @@ const quickBookmarks = [
   { name: 'GitHub', url: 'https://github.com', iconPath: 'M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z' }
 ];
 
-// Вспомогательные методы
-const buildProxyUrl = (url) => {
-  if (!url || url === 'about:blank' || url.trim() === '') return '';
-  try {
-    if (window.scramjet && typeof window.scramjet.encodeUrl === 'function') {
-      return window.scramjet.encodeUrl(url);
-    }
-    if (window.__scramjet$config && typeof window.__scramjet$config.encodeUrl === 'function') {
-      return window.__scramjet$config.prefix + window.__scramjet$config.encodeUrl(url);
-    }
-  } catch (e) {}
-  return '/service/' + encodeURIComponent(url);
-};
-
-// Функция 1: ВОССТАНОВЛЕНА ДЛЯ ИЗБЕЖАНИЯ ОШИБКИ В КОНСОЛИ
-const decodeProxyUrl = (proxiedPath) => {
-  if (!proxiedPath || !proxiedPath.includes('/service/')) return null;
-  try {
-    const encoded = proxiedPath.split('/service/')[1];
-    if (!encoded) return null;
-    if (window.scramjet && typeof window.scramjet.decodeUrl === 'function') {
-      return window.scramjet.decodeUrl(encoded);
-    }
-    if (window.__scramjet$config && typeof window.__scramjet$config.decodeUrl === 'function') {
-      return window.__scramjet$config.decodeUrl(encoded);
-    }
-  } catch (e) {}
-  return null;
-};
-
-const encodeXor = (str) => {
-  if (!str) return str;
-  return encodeURIComponent(encodeURIComponent(str).split('').map((char, ind) => ind % 2 ? String.fromCharCode(char.charCodeAt(0) ^ 2) : char).join(''));
-};
-
-const decodeXor = (str) => {
-  if (!str) return str;
-  let [input, ...search] = str.split('?');
-  try {
-    let decoded = decodeURIComponent(input).split('').map((char, ind) => ind % 2 ? String.fromCharCode(char.charCodeAt(0) ^ 2) : char).join('');
-    return decodeURIComponent(decoded) + (search.length ? '?' + search.join('?') : '');
-  } catch (e) { return str; }
-};
-
-// Функция 2: ФОРМАТИРОВАНИЕ YOUTUBE ССЫЛОК ДЛЯ ЗАЩИТЫ ОТ STATUS_BREAKPOINT
-const formatYouTubeUrl = (urlStr) => {
-  if (!urlStr) return urlStr;
-  try {
-    if (urlStr.includes('youtube.com') || urlStr.includes('youtu.be')) {
-      return urlStr
-        .replace(/(www\.)?youtube\.com/, 'm.youtube.com')
-        .replace('youtu.be/', 'm.youtube.com/watch?v=');
-    }
-  } catch(e) {}
-  return urlStr;
-};
-
-// Функция 3: СИНХРОНИЗАЦИЯ АДРЕСА ВО ВРЕМЯ КЛИКОВ ПО ЮТУБУ (И ВООБЩЕ ПО SPA)
-const syncTabLocation = (iframe, tab) => {
-  try {
-    if (!iframe || !iframe.contentWindow) return;
-    const proxiedPath = iframe.contentWindow.location.pathname + iframe.contentWindow.location.search;
-    const realUrl = decodeProxyUrl(proxiedPath);
-    
-    if (realUrl && /^https?:\/\//i.test(realUrl) && realUrl !== tab.url) {
-      tab.url = realUrl;
-      if (tab.id === browserStore.activeTabId) inputUrl.value = realUrl;
-      
-      if (!tab.history) tab.history = [];
-      if (tab.history[tab.historyIndex] !== realUrl) {
-        tab.history = tab.history.slice(0, (tab.historyIndex ?? -1) + 1);
-        tab.history.push(realUrl);
-        tab.historyIndex = tab.history.length - 1;
-      }
-    }
-  } catch (e) {}
-};
-
-const goBack = () => {
-  const iframe = document.getElementById(`iframe-${browserStore.activeTabId}`);
-  if (iframe && iframe.contentWindow) {
-    try { iframe.contentWindow.history.back(); } catch (e) {}
-  }
-  const tab = browserStore.tabs.find(t => t.id === browserStore.activeTabId);
-  if (tab && tab.history && tab.historyIndex > 0) {
-    tab.historyIndex--;
-    const prevUrl = tab.history[tab.historyIndex];
-    tab.url = prevUrl;
-    inputUrl.value = prevUrl;
-  }
-};
-
-const goForward = () => {
-  const iframe = document.getElementById(`iframe-${browserStore.activeTabId}`);
-  if (iframe && iframe.contentWindow) {
-    try { iframe.contentWindow.history.forward(); } catch (e) {}
-  }
-  const tab = browserStore.tabs.find(t => t.id === browserStore.activeTabId);
-  if (tab && tab.history && tab.historyIndex < tab.history.length - 1) {
-    tab.historyIndex++;
-    const nextUrl = tab.history[tab.historyIndex];
-    tab.url = nextUrl;
-    inputUrl.value = nextUrl;
-  }
-};
-
 const navigate = () => {
   processNavigation(browserStore.activeTabId, inputUrl.value);
 };
@@ -300,134 +189,128 @@ const openUrlInTab = (tabId, url) => {
   processNavigation(tabId, url);
 };
 
-const processNavigation = (tabId, targetUrl) => {
+// вместо buildProxyUrl / decodeProxyUrl / setupNewWindowInterceptor / syncTabLocation —
+// один ScramjetFrame на вкладку
+
+const scramjetFrames = new Map(); // tabId -> ScramjetFrame
+
+function pushHistory(tab, url) {
+  if (!tab.history) tab.history = [];
+  if (tab.historyIndex === undefined) tab.historyIndex = -1;
+
+  // не дублируем, если это тот же URL, что уже стоит текущим
+  if (tab.history[tab.historyIndex] === url) return;
+
+  tab.history = tab.history.slice(0, tab.historyIndex + 1);
+  tab.history.push(url);
+  tab.historyIndex = tab.history.length - 1;
+}
+
+function ensureFrame(tab, container) {
+  if (scramjetFrames.has(tab.id)) return scramjetFrames.get(tab.id);
+  if (!window.scramjet || typeof window.scramjet.createFrame !== 'function') {
+    console.error('Scramjet ещё не инициализирован');
+    return null;
+  }
+
+  const frame = window.scramjet.createFrame();
+  frame.frame.className = 'w-full h-full border-none absolute inset-0 bg-white';
+  container.appendChild(frame.frame);
+
+  frame.addEventListener('urlchange', (e) => {
+    if (!e.url) return;
+    const url = e.url.toString();
+    tab.url = url;
+    tab.title = extractHostname(url);
+    tab.isLoading = false;
+    if (tab.id === browserStore.activeTabId) inputUrl.value = url;
+
+    pushHistory(tab, url); // фиксируем в СВОЮ историю, не полагаемся на iframe history
+  });
+
+  scramjetFrames.set(tab.id, frame);
+  return frame;
+}
+
+const buildProxyUrl = (url) => {
+  if (!url || url === 'about:blank' || url.trim() === '') return '';
+  if (window.scramjet && typeof window.scramjet.encodeUrl === 'function') {
+    return window.scramjet.encodeUrl(url);
+  }
+  return '';
+};
+
+const processNavigation = async (tabId, targetUrl) => {
   let url = targetUrl.trim();
   if (!url) return;
-  
   if (!/^https?:\/\//i.test(url) && url.includes('.')) {
     url = 'https://' + url;
   } else if (!url.includes('.')) {
     url = `https://duckduckgo.com/?q=${encodeURIComponent(url)}`;
   }
 
-  // Применяем защиту от краша YouTube
-  url = formatYouTubeUrl(url);
+  url = normalizeUrl(url);
 
   const tab = browserStore.tabs.find(t => t.id === tabId);
-  if (tab) {
-    tab.isLoading = true;
+  if (!tab) return;
+
+  tab.isLoading = true;
+  tab.url = url;
+  tab.title = extractHostname(url);
+  if (tabId === browserStore.activeTabId) inputUrl.value = url;
+
+  await nextTick();
+  const container = document.getElementById(`frame-container-${tabId}`);
+  if (!container) return;
+
+  const frame = ensureFrame(tab, container);
+  if (!frame) return;
+
+  pushHistory(tab, url); // добавили сюда явный переход тоже
+  frame.go(url);
+};
+
+const goBack = async () => {
+  const tab = browserStore.tabs.find(t => t.id === browserStore.activeTabId);
+  if (!tab || !tab.history || tab.historyIndex <= 0) return;
+  tab.historyIndex--;
+  const url = tab.history[tab.historyIndex];
+
+  const frame = scramjetFrames.get(tab.id);
+  if (frame && container) {
     tab.url = url;
-    tab.title = extractHostname(url);
-    loadedTabIds.value.add(tabId);
-
-    if (!tab.history) tab.history = [];
-    if (tab.history[tab.historyIndex] !== url) {
-      tab.history = tab.history.slice(0, (tab.historyIndex ?? -1) + 1);
-      tab.history.push(url);
-      tab.historyIndex = tab.history.length - 1;
-    }
-  }
-
-  if (tabId === browserStore.activeTabId) {
     inputUrl.value = url;
+    frame.go(url); // просто грузим нужный адрес в ЭТОТ конкретный фрейм
   }
+};
+
+const goForward = async () => {
+  const tab = browserStore.tabs.find(t => t.id === browserStore.activeTabId);
+  if (!tab || !tab.history || tab.historyIndex >= tab.history.length - 1) return;
+  tab.historyIndex++;
+  const url = tab.history[tab.historyIndex];
+
+  const frame = scramjetFrames.get(tab.id);
+  if (frame) {
+    tab.url = url;
+    inputUrl.value = url;
+    frame.go(url);
+  }
+};
+
+const reloadCurrentTab = () => {
+  scramjetFrames.get(browserStore.activeTabId)?.reload();
 };
 
 const addNewTab = () => {
   browserStore.addTab('');
 };
 
-const reloadCurrentTab = () => {
-  const tab = browserStore.tabs.find(t => t.id === browserStore.activeTabId);
-  if (tab && tab.url) {
-    tab.isLoading = true;
-    const iframe = document.getElementById(`iframe-${tab.id}`);
-    if (iframe) iframe.src = buildProxyUrl(tab.url);
+watch(() => browserStore.tabs.map(t => t.id), (newIds) => {
+  for (const id of scramjetFrames.keys()) {
+    if (!newIds.includes(id)) scramjetFrames.delete(id);
   }
-};
-
-// Функция 4: ВНЕДРЕНИЕ ПЕРЕХВАТЧИКА ВНУТРЬ IFRAME (Для кликов и пуш-стейтов)
-const setupNewWindowInterceptor = (iframe, tab) => {
-  try {
-    if (!iframe.contentWindow) return;
-
-    if (iframe.contentWindow.history) {
-      const origPush = iframe.contentWindow.history.pushState;
-      iframe.contentWindow.history.pushState = function (...args) {
-        const res = origPush.apply(this, args);
-        setTimeout(() => syncTabLocation(iframe, tab), 50);
-        return res;
-      };
-
-      const origReplace = iframe.contentWindow.history.replaceState;
-      iframe.contentWindow.history.replaceState = function (...args) {
-        const res = origReplace.apply(this, args);
-        setTimeout(() => syncTabLocation(iframe, tab), 50);
-        return res;
-      };
-    }
-
-    iframe.contentWindow.addEventListener('popstate', () => {
-      setTimeout(() => syncTabLocation(iframe, tab), 50);
-    });
-
-    iframe.contentWindow.open = function (url) {
-      if (url) {
-        const proxiedPath = typeof url === 'string' && url.startsWith('http') ? url : (iframe.contentWindow.location.origin + url);
-        let realUrl = decodeProxyUrl(proxiedPath) || url;
-        realUrl = formatYouTubeUrl(realUrl);
-        browserStore.addTab(realUrl);
-      }
-      return null;
-    };
-
-    if (iframe.contentDocument) {
-      iframe.contentDocument.addEventListener('click', (e) => {
-        const link = e.target.closest('a');
-        if (link) {
-          const href = link.href;
-          let realUrl = decodeProxyUrl(href) || href;
-
-          if (link.target === '_blank' || link.target === '_new') {
-            e.preventDefault();
-            realUrl = formatYouTubeUrl(realUrl);
-            browserStore.addTab(realUrl);
-            return;
-          }
-
-          // Анти-краш если кликаем на ютуб из поисковика
-          if (realUrl && realUrl.includes('youtube.com') && !realUrl.includes('m.youtube.com') && !realUrl.includes('youtube-nocookie.com')) {
-            e.preventDefault();
-            realUrl = formatYouTubeUrl(realUrl);
-            iframe.src = buildProxyUrl(realUrl);
-            return;
-          }
-        }
-        setTimeout(() => syncTabLocation(iframe, tab), 150);
-      }, true);
-    }
-  } catch (e) {}
-};
-
-const onFrameLoad = (tabId) => {
-  const tab = browserStore.tabs.find(t => t.id === tabId);
-  if (!tab) return;
-  
-  tab.isLoading = false;
-
-  try {
-    const iframe = document.getElementById(`iframe-${tabId}`);
-    if (iframe && iframe.contentDocument) {
-      
-      setupNewWindowInterceptor(iframe, tab);
-      syncTabLocation(iframe, tab);
-
-      if (iframe.contentDocument.title) {
-        tab.title = iframe.contentDocument.title;
-      }
-    }
-  } catch (e) {}
-};
+});
 
 // Забор иконок (Проксируется через Scramjet для обхода CORS)
 const getTabFavicon = (tab) => {
@@ -439,6 +322,17 @@ const getTabFavicon = (tab) => {
   } catch (e) {
     return null;
   }
+};
+
+const normalizeUrl = (urlStr) => {
+  try {
+    if (/(^|\.)youtube\.com$/.test(new URL(urlStr).hostname) || urlStr.includes('youtu.be')) {
+      return urlStr
+        .replace(/(www\.)?youtube\.com/, 'm.youtube.com')
+        .replace('youtu.be/', 'm.youtube.com/watch?v=');
+    }
+  } catch (e) {}
+  return urlStr;
 };
 
 const onFaviconError = (event, tab) => {
