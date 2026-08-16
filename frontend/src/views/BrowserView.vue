@@ -1,7 +1,30 @@
 <template>
   <div class="flex flex-col h-screen w-screen bg-[#08080a] text-zinc-200 select-none font-sans overflow-hidden">
     
-    <!-- 1. ПАНЕЛЬ ВКЛАДОК -->
+    <!-- HEADER WRAPPER ДЛЯ ИЗМЕРЕНИЯ ВЫСОТЫ -->
+    <div ref="headerWrapper" class="flex flex-col w-full shrink-0 z-30 shadow-md">
+      <!-- 0. CUSTOM TITLEBAR -->
+      <div class="h-8 flex items-center justify-between bg-[#08080a] select-none border-b border-zinc-800/40">
+        <div @mousedown="startDragging" class="flex items-center space-x-2 pl-3 h-full flex-1">
+          <svg class="w-4 h-4 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          <span class="text-xs font-semibold tracking-wide text-zinc-300">Chabupelik</span>
+        </div>
+        <div class="flex items-center h-full">
+          <button @click="minimizeWindow" class="w-10 h-full flex items-center justify-center text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4" /></svg>
+          </button>
+          <button @click="maximizeWindow" class="w-10 h-full flex items-center justify-center text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" /></svg>
+          </button>
+          <button @click="closeWindow" class="w-10 h-full flex items-center justify-center text-zinc-400 hover:text-white hover:bg-red-500 transition-colors">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- 1. ПАНЕЛЬ ВКЛАДОК -->
     <div class="flex items-center bg-[#0d0d10] px-2 pt-1.5 overflow-x-auto border-b border-zinc-800/80 relative z-20 shrink-0">
       <div 
         v-for="tab in browserStore.tabs" 
@@ -97,6 +120,7 @@
         </div>
       </form>
     </div>
+    </div> <!-- END HEADER WRAPPER -->
 
     <!-- 3. СТАРТОВАЯ СТРАНИЦА (Отображается когда вкладка пустая) -->
     <div v-show="isCurrentStartPage" class="flex-1 bg-[#08080a] relative overflow-hidden flex flex-col items-center justify-center px-4">
@@ -230,10 +254,19 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { useAuthStore } from '../stores/auth.store';
 import { useBrowserStore } from '../stores/browser.store';
+
+const headerWrapper = ref(null);
+let resizeObserver = null;
+
+const minimizeWindow = () => invoke('native_minimize_window');
+const maximizeWindow = () => invoke('native_maximize_window');
+const closeWindow = () => invoke('native_close_window');
+const startDragging = () => invoke('native_start_dragging');
 
 const authStore = useAuthStore();
 const browserStore = useBrowserStore();
@@ -271,7 +304,10 @@ watch(() => browserStore.activeTabId, async (newId) => {
     } catch (e) {
       if (e === 'NOT_FOUND' && activeTab.url && activeTab.url !== 'about:blank') {
         // Таб еще не создан в Rust (например, восстановлен из облака)
-        invoke('native_navigate_tab', { tabId: newId, url: activeTab.url }).catch(console.error);
+        activeTab.isLoading = true;
+        invoke('native_navigate_tab', { tabId: newId, url: activeTab.url }).catch(() => {
+          activeTab.isLoading = false;
+        });
       }
     }
   }
@@ -282,9 +318,52 @@ onMounted(() => {
   if (activeTab && activeTab.url && activeTab.url !== 'about:blank') {
     invoke('native_navigate_tab', { tabId: activeTab.id, url: activeTab.url }).catch(console.error);
   }
+  // Инициализация ResizeObserver для передачи высоты Header'а в Rust
+  resizeObserver = new ResizeObserver((entries) => {
+    for (let entry of entries) {
+      if (entry.target === headerWrapper.value) {
+        const height = entry.contentRect.height;
+        invoke('native_update_top_bar_height', { height }).catch(console.error);
+      }
+    }
+  });
+  if (headerWrapper.value) {
+    resizeObserver.observe(headerWrapper.value);
+  }
+
+  // Подписка на события загрузки страниц из Rust
+  listen('webview-loading', (event) => {
+    const { tabId, url } = event.payload;
+    const tab = browserStore.tabs.find(t => t.id === tabId);
+    if (tab) {
+      tab.isLoading = true;
+      if (browserStore.activeTabId === tabId && url) {
+        inputUrl.value = url;
+      }
+    }
+  });
+
+  listen('webview-loaded', (event) => {
+    const { tabId, url } = event.payload;
+    const tab = browserStore.tabs.find(t => t.id === tabId);
+    if (tab) {
+      tab.isLoading = false;
+      tab.url = url;
+      if (browserStore.activeTabId === tabId) {
+        inputUrl.value = url;
+      }
+      browserStore.updateTab(tabId, { url });
+    }
+  });
 });
 
-const navigate = () => {
+onUnmounted(() => {
+  if (resizeObserver && headerWrapper.value) {
+    resizeObserver.unobserve(headerWrapper.value);
+  }
+});
+
+const navigate = async () => {
   processNavigation(browserStore.activeTabId, inputUrl.value);
 };
 
@@ -297,26 +376,32 @@ const openUrlInActiveTab = (url) => {
 };
 
 const processNavigation = async (tabId, targetUrl) => {
+  if (!targetUrl.trim()) return;
+  
   let url = targetUrl.trim();
-  if (!url) return;
-  if (!/^https?:\/\//i.test(url) && url.includes('.')) {
-    url = 'https://' + url;
-  } else if (!url.includes('.')) {
-    url = `https://duckduckgo.com/?q=${encodeURIComponent(url)}`;
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    if (url.includes('.') && !url.includes(' ')) {
+      url = `https://${url}`;
+    } else {
+      url = `https://duckduckgo.com/?q=${encodeURIComponent(url)}`;
+    }
   }
 
   const tab = browserStore.tabs.find(t => t.id === tabId);
-  if (!tab) return;
-
-  tab.url = url;
-  tab.title = extractHostname(url);
-  if (tabId === browserStore.activeTabId) inputUrl.value = url;
-
-  // Передаем управление в нативный движок Chromium (WebView2)
+  if (tab) {
+    tab.isLoading = true;
+  }
+  
+  browserStore.updateTab(tabId, { url });
+  if (tabId === browserStore.activeTabId) {
+    inputUrl.value = url;
+  }
+  
   try {
     await invoke('native_navigate_tab', { tabId, url });
   } catch (err) {
     console.error('Ошибка навигации нативного Webview:', err);
+    if (tab) tab.isLoading = false;
   }
 };
 
@@ -358,8 +443,15 @@ const addNewTab = () => {
   browserStore.addTab('');
 };
 
-const getTabFavicon = (_tab) => {
-  return null;
+const getTabFavicon = (tab) => {
+  if (failedFavicons.value.has(tab.id) || !tab.url || tab.url.startsWith('about:')) return null;
+  try {
+    const url = new URL(tab.url);
+    // Использование универсального сервиса Google Favicons
+    return `https://s2.googleusercontent.com/s2/favicons?domain=${url.hostname}&sz=32`;
+  } catch (e) {
+    return null;
+  }
 };
 
 const onFaviconError = (tab) => {

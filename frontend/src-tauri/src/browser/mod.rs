@@ -1,10 +1,8 @@
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tauri::{Manager, WebviewBuilder, WebviewUrl, WebviewWindow};
+use tauri::{Emitter, Manager, WebviewBuilder, WebviewUrl};
 use url::Url;
-
-pub const TOP_BAR_HEIGHT: f64 = 84.0;
 
 /// Менеджер нативных Chromium-вкладок (Multi-Webview)
 #[derive(Clone, Default)]
@@ -12,6 +10,7 @@ pub struct TabManager {
     // Хранилище созданных вкладок: tab_id -> webview label
     tabs: Arc<Mutex<HashMap<String, String>>>,
     active_tab_id: Arc<Mutex<Option<String>>>,
+    top_bar_height: Arc<Mutex<f64>>,
 }
 
 impl TabManager {
@@ -19,7 +18,16 @@ impl TabManager {
         Self {
             tabs: Arc::new(Mutex::new(HashMap::new())),
             active_tab_id: Arc::new(Mutex::new(None)),
+            top_bar_height: Arc::new(Mutex::new(84.0)), // Значение по умолчанию
         }
+    }
+
+    pub fn update_top_bar_height(&self, window: &tauri::Window, height: f64) {
+        {
+            let mut h = self.top_bar_height.lock();
+            *h = height;
+        }
+        self.sync_main_window_geometry(window);
     }
 
     /// Создает новую нативную вкладку Chromium под панелью управления или переходит по URL
@@ -68,16 +76,29 @@ impl TabManager {
             .scale_factor()
             .map_err(|e| format!("Failed to get scale factor: {}", e))?;
         let logical_size = window_size.to_logical::<f64>(scale_factor);
-        let content_height = (logical_size.height - TOP_BAR_HEIGHT).max(100.0);
+        let top_bar_height = *self.top_bar_height.lock();
+        let content_height = (logical_size.height - top_bar_height).max(100.0);
 
-        // 3. Создаем настоящий дочерний Webview внутри окна
-        println!("[TAB_MANAGER] Adding child Webview for label {}...", label);
-        let builder = WebviewBuilder::new(&label, parsed_url);
+        let t_id = tab_id.to_string();
+        let builder = WebviewBuilder::new(&label, parsed_url)
+            .on_page_load(move |webview, payload| {
+                if let Ok(url) = webview.url() {
+                    #[derive(serde::Serialize, Clone)]
+                    struct Payload {
+                        tabId: String,
+                        url: String,
+                    }
+                    let _ = webview.emit("webview-loaded", Payload {
+                        tabId: t_id.clone(),
+                        url: url.to_string(),
+                    });
+                }
+            });
 
         let _wv = window
             .add_child(
                 builder,
-                tauri::LogicalPosition::new(0.0, TOP_BAR_HEIGHT),
+                tauri::LogicalPosition::new(0.0, top_bar_height),
                 tauri::LogicalSize::new(logical_size.width, content_height),
             )
             .map_err(|e| {
@@ -118,7 +139,8 @@ impl TabManager {
             .scale_factor()
             .unwrap_or(1.0);
         let logical_size = window_size.to_logical::<f64>(scale_factor);
-        let content_height = (logical_size.height - TOP_BAR_HEIGHT).max(100.0);
+        let top_bar_height = *self.top_bar_height.lock();
+        let content_height = (logical_size.height - top_bar_height).max(100.0);
 
         let tabs_map = self.tabs.lock();
         let mut found_active = false;
@@ -126,7 +148,7 @@ impl TabManager {
             if let Some(wv) = app_handle.get_webview(label) {
                 if id == tab_id {
                     println!("[TAB_MANAGER] Showing webview: {}", label);
-                    let _ = wv.set_position(tauri::LogicalPosition::new(0.0, TOP_BAR_HEIGHT));
+                    let _ = wv.set_position(tauri::LogicalPosition::new(0.0, top_bar_height));
                     let _ = wv.set_size(tauri::LogicalSize::new(logical_size.width, content_height));
                     let _ = wv.show();
                     let _ = wv.set_focus();
@@ -215,7 +237,24 @@ impl TabManager {
     pub fn sync_main_window_geometry(&self, window: &tauri::Window) {
         let active_id = self.active_tab_id.lock().clone();
         if let Some(id) = active_id {
-            let _ = self.switch_to_tab(window, &id);
+            let label = {
+                let tabs_map = self.tabs.lock();
+                tabs_map.get(&id).cloned()
+            };
+            
+            if let Some(lbl) = label {
+                if let Some(wv) = window.app_handle().get_webview(&lbl) {
+                    if let Ok(window_size) = window.inner_size() {
+                        let scale_factor = window.scale_factor().unwrap_or(1.0);
+                        let logical_size = window_size.to_logical::<f64>(scale_factor);
+                        let top_bar_height = *self.top_bar_height.lock();
+                        let content_height = (logical_size.height - top_bar_height).max(100.0);
+                        
+                        let _ = wv.set_position(tauri::LogicalPosition::new(0.0, top_bar_height));
+                        let _ = wv.set_size(tauri::LogicalSize::new(logical_size.width, content_height));
+                    }
+                }
+            }
         }
     }
 

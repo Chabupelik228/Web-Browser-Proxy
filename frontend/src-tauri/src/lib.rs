@@ -47,6 +47,11 @@ pub fn run() {
             native_go_forward,
             native_reload,
             native_close_all_tabs,
+            native_update_top_bar_height,
+            native_minimize_window,
+            native_maximize_window,
+            native_close_window,
+            native_start_dragging,
         ])
         .on_window_event(|window, event| {
             match event {

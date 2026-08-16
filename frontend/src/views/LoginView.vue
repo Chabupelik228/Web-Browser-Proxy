@@ -1,6 +1,29 @@
 <template>
-  <div class="flex flex-col items-center justify-center min-h-screen bg-[#08080a] text-zinc-100 font-sans select-none p-4 relative overflow-hidden">
+  <div class="flex flex-col h-screen w-screen bg-[#08080a] text-zinc-100 font-sans select-none overflow-hidden relative">
     
+    <!-- 0. CUSTOM TITLEBAR -->
+    <div class="h-8 flex items-center justify-between bg-[#08080a] select-none border-b border-zinc-800/40 shrink-0 z-50">
+      <div @mousedown="startDragging" class="flex items-center space-x-2 pl-3 h-full flex-1">
+        <svg class="w-4 h-4 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
+        <span class="text-xs font-semibold tracking-wide text-zinc-300">Chabupelik</span>
+      </div>
+      <div class="flex items-center h-full">
+        <button @click="minimizeWindow" class="w-10 h-full flex items-center justify-center text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4" /></svg>
+        </button>
+        <button @click="maximizeWindow" class="w-10 h-full flex items-center justify-center text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" /></svg>
+        </button>
+        <button @click="closeWindow" class="w-10 h-full flex items-center justify-center text-zinc-400 hover:text-white hover:bg-red-500 transition-colors">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- MAIN CONTENT -->
+    <div class="flex-1 flex flex-col items-center justify-center p-4 relative">
     <!-- Фоновый паттерн -->
     <div class="absolute inset-0 bg-[radial-gradient(#1c1c24_1px,transparent_1px)] [background-size:24px_24px] opacity-20 pointer-events-none"></div>
 
@@ -160,13 +183,20 @@
         </div>
       </div>
 
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
 import { ref } from 'vue';
+import { invoke } from '@tauri-apps/api/core';
 import { useAuthStore } from '../stores/auth.store';
+
+const minimizeWindow = () => invoke('native_minimize_window');
+const maximizeWindow = () => invoke('native_maximize_window');
+const closeWindow = () => invoke('native_close_window');
+const startDragging = () => invoke('native_start_dragging');
 
 const authMode = ref('otp');
 const otpCode = ref('');

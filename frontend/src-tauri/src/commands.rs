@@ -207,3 +207,48 @@ pub async fn native_close_all_tabs(
 
     rx.await.map_err(|e| e.to_string())?
 }
+
+#[tauri::command]
+pub fn native_update_top_bar_height(
+    app: tauri::AppHandle,
+    height: f64,
+    tab_manager: State<'_, TabManager>,
+) {
+    if let Some(win) = app.get_window("main").or_else(|| app.windows().into_values().next().map(|w| w.clone())) {
+        tab_manager.update_top_bar_height(&win, height);
+    }
+}
+
+#[tauri::command]
+pub fn native_minimize_window(app: tauri::AppHandle) {
+    if let Some(win) = app.get_window("main").or_else(|| app.windows().into_values().next().map(|w| w.clone())) {
+        let _ = win.minimize();
+    }
+}
+
+#[tauri::command]
+pub fn native_maximize_window(app: tauri::AppHandle) {
+    if let Some(win) = app.get_window("main").or_else(|| app.windows().into_values().next().map(|w| w.clone())) {
+        if let Ok(is_maximized) = win.is_maximized() {
+            if is_maximized {
+                let _ = win.unmaximize();
+            } else {
+                let _ = win.maximize();
+            }
+        }
+    }
+}
+
+#[tauri::command]
+pub fn native_close_window(app: tauri::AppHandle) {
+    if let Some(win) = app.get_window("main").or_else(|| app.windows().into_values().next().map(|w| w.clone())) {
+        let _ = win.close();
+    }
+}
+
+#[tauri::command]
+pub fn native_start_dragging(app: tauri::AppHandle) {
+    if let Some(win) = app.get_window("main").or_else(|| app.windows().into_values().next().map(|w| w.clone())) {
+        let _ = win.start_dragging();
+    }
+}
