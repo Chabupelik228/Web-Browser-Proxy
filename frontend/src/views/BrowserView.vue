@@ -230,7 +230,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { useAuthStore } from '../stores/auth.store';
 import { useBrowserStore } from '../stores/browser.store';
@@ -247,17 +247,39 @@ const isCurrentStartPage = computed(() => {
   return !activeTab || !activeTab.url || activeTab.url === '' || activeTab.url === 'about:blank';
 });
 
+let backupTimeout = null;
+const scheduleBackup = () => {
+  if (backupTimeout) clearTimeout(backupTimeout);
+  backupTimeout = setTimeout(() => {
+    if (authStore.accessToken && authStore.isProxyReady) {
+      authStore.backupSession();
+    }
+  }, 1000);
+};
+
+watch(() => browserStore.tabs, () => {
+  scheduleBackup();
+}, { deep: true });
+
 watch(() => browserStore.activeTabId, (newId) => {
   const activeTab = browserStore.tabs.find(t => t.id === newId);
   if (activeTab) {
     inputUrl.value = activeTab.url || '';
     startPageInput.value = '';
-    // Переключаем нативный Chromium Webview на активный
     if (activeTab.url && activeTab.url !== 'about:blank') {
+      invoke('native_navigate_tab', { tabId: newId, url: activeTab.url }).catch(console.error);
+    } else {
       invoke('native_switch_tab', { tabId: newId }).catch(console.error);
     }
   }
 }, { immediate: true });
+
+onMounted(() => {
+  const activeTab = browserStore.tabs.find(t => t.id === browserStore.activeTabId);
+  if (activeTab && activeTab.url && activeTab.url !== 'about:blank') {
+    invoke('native_navigate_tab', { tabId: activeTab.id, url: activeTab.url }).catch(console.error);
+  }
+});
 
 const navigate = () => {
   processNavigation(browserStore.activeTabId, inputUrl.value);

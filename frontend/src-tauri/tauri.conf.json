@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Chabupelik Browser",
         "width": 800,
         "height": 600,

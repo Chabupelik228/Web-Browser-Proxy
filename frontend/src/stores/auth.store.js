@@ -47,7 +47,7 @@ export const useAuthStore = defineStore('auth', () => {
             // Запускаем нативный Wisp-туннель в Rust
             await startProxyTunnel(token);
 
-            // Восстанавливаем сохраненную сессию из облака
+            // Восстанавливаем сохраненную сессию из облака (VPS)
             await restoreSession();
 
             return true;
@@ -94,9 +94,11 @@ export const useAuthStore = defineStore('auth', () => {
             proxyInfo.value = info;
             isProxyReady.value = true;
             console.log('[TAURI PROXY] Локальный прокси запущен:', info);
+            return true;
         } catch (err) {
             console.error('[TAURI PROXY ERROR] Ошибка запуска туннеля:', err);
             isProxyReady.value = false;
+            throw err;
         }
     };
 
@@ -158,9 +160,11 @@ export const useAuthStore = defineStore('auth', () => {
             console.error('Ошибка при выходе на сервере:', e);
         } finally {
             try {
+                await invoke('native_close_all_tabs');
                 await invoke('stop_tunnel');
             } catch (_) {}
 
+            localStorage.removeItem('chabupelik_auth');
             user.value = null;
             accessToken.value = '';
             masterPassword.value = '';
@@ -178,6 +182,7 @@ export const useAuthStore = defineStore('auth', () => {
     return {
         user,
         accessToken,
+        masterPassword,
         deviceId,
         proxyInfo,
         isProxyReady,

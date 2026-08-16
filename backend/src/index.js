@@ -268,13 +268,13 @@ fastify.post("/api/auth/otp/verify", async (req, reply) => {
 		const accessToken = jwt.sign(
 			{ id: userId, username, deviceId },
 			process.env.JWT_SECRET,
-			{ expiresIn: "10m" }
+			{ expiresIn: "30d" }
 		);
 
 		const refreshToken = jwt.sign(
 			{ id: userId, deviceId },
 			process.env.JWT_SECRET,
-			{ expiresIn: "7d" }
+			{ expiresIn: "30d" }
 		);
 
 		return {
@@ -311,18 +311,18 @@ fastify.post("/api/auth/login", async (req, reply) => {
 		await redis.set(`session:${user.id}`, JSON.stringify({
 			deviceId,
 			updatedAt: Date.now(),
-		}), { EX: 7 * 24 * 60 * 60 });
+		}), { EX: 30 * 24 * 60 * 60 });
 
 		const accessToken = jwt.sign(
 			{ id: user.id, username: user.username, deviceId },
 			process.env.JWT_SECRET,
-			{ expiresIn: "10m" }
+			{ expiresIn: "30d" }
 		);
 
 		const refreshToken = jwt.sign(
 			{ id: user.id, deviceId },
 			process.env.JWT_SECRET,
-			{ expiresIn: "7d" }
+			{ expiresIn: "30d" }
 		);
 
 		return {
@@ -373,18 +373,18 @@ fastify.post("/api/auth/refresh", async (req, reply) => {
 		await redis.set(`session:${user.id}`, JSON.stringify({
 			deviceId,
 			updatedAt: Date.now(),
-		}), { EX: 7 * 24 * 60 * 60 });
+		}), { EX: 30 * 24 * 60 * 60 });
 
 		const newAccessToken = jwt.sign(
 			{ id: user.id, username: user.username, deviceId },
 			process.env.JWT_SECRET,
-			{ expiresIn: "10m" }
+			{ expiresIn: "30d" }
 		);
 
 		const newRefreshToken = jwt.sign(
 			{ id: user.id, deviceId },
 			process.env.JWT_SECRET,
-			{ expiresIn: "7d" }
+			{ expiresIn: "30d" }
 		);
 
 		return {
@@ -435,8 +435,11 @@ fastify.get("/api/sync", async (req, reply) => {
 			"SELECT encrypted_cookies, open_tabs, updated_at FROM sessions_sync WHERE user_id = $1",
 			[req.user.id]
 		);
-		return { status: "ok", data: result.rows[0] || { encrypted_cookies: null, open_tabs: [] } };
+		const data = result.rows[0] || { encrypted_cookies: null, open_tabs: [] };
+		console.log(`[SYNC RESTORE] Пользователь ${req.user.id} запросил сессию: ${JSON.stringify(data.open_tabs)}`);
+		return { status: "ok", data };
 	} catch (err) {
+		console.error("[SYNC RESTORE ERROR]", err);
 		return reply.code(500).send({ status: "error" });
 	}
 });
@@ -468,8 +471,10 @@ fastify.post("/api/sync", async (req, reply) => {
 			 DO UPDATE SET encrypted_cookies = $2, open_tabs = $3, updated_at = NOW()`,
 			[req.user.id, encrypted_cookies, JSON.stringify(open_tabs || [])]
 		);
+		console.log(`[SYNC BACKUP] Успешно сохранена сессия для user ${req.user.id}: ${(open_tabs || []).length} вкладок`);
 		return { status: "ok" };
 	} catch (err) {
+		console.error("[SYNC BACKUP ERROR]", err);
 		return reply.code(500).send({ status: "error" });
 	}
 });

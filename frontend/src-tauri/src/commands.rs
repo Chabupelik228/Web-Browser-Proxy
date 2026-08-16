@@ -56,16 +56,21 @@ pub fn decrypt_session_data(
 
 #[tauri::command]
 pub async fn native_navigate_tab(
-    window: WebviewWindow,
+    app: tauri::AppHandle,
     tab_id: String,
     url: String,
     tab_manager: State<'_, TabManager>,
 ) -> Result<(), String> {
     let tm = tab_manager.inner().clone();
-    let app = window.app_handle().clone();
+    let app_clone = app.clone();
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
-        let res = tm.create_or_navigate_tab(&window, &tab_id, &url);
+        let win = app_clone.get_window("main")
+            .or_else(|| app_clone.webview_windows().into_values().next().map(|w| w.as_ref().window().clone()));
+        let res = match win {
+            Some(w) => tm.create_or_navigate_tab(&w, &tab_id, &url),
+            None => Err("Main window not found".to_string()),
+        };
         let _ = tx.send(res);
     }).map_err(|e| e.to_string())?;
 
@@ -74,15 +79,20 @@ pub async fn native_navigate_tab(
 
 #[tauri::command]
 pub async fn native_switch_tab(
-    window: WebviewWindow,
+    app: tauri::AppHandle,
     tab_id: String,
     tab_manager: State<'_, TabManager>,
 ) -> Result<(), String> {
     let tm = tab_manager.inner().clone();
-    let app = window.app_handle().clone();
+    let app_clone = app.clone();
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
-        let res = tm.switch_to_tab(&window, &tab_id);
+        let win = app_clone.get_window("main")
+            .or_else(|| app_clone.webview_windows().into_values().next().map(|w| w.as_ref().window().clone()));
+        let res = match win {
+            Some(w) => tm.switch_to_tab(&w, &tab_id),
+            None => Err("Main window not found".to_string()),
+        };
         let _ = tx.send(res);
     }).map_err(|e| e.to_string())?;
 
@@ -91,15 +101,20 @@ pub async fn native_switch_tab(
 
 #[tauri::command]
 pub async fn native_close_tab(
-    window: WebviewWindow,
+    app: tauri::AppHandle,
     tab_id: String,
     tab_manager: State<'_, TabManager>,
 ) -> Result<(), String> {
     let tm = tab_manager.inner().clone();
-    let app = window.app_handle().clone();
+    let app_clone = app.clone();
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
-        let res = tm.close_tab(&window, &tab_id);
+        let win = app_clone.get_window("main")
+            .or_else(|| app_clone.webview_windows().into_values().next().map(|w| w.as_ref().window().clone()));
+        let res = match win {
+            Some(w) => tm.close_tab(&w, &tab_id),
+            None => Err("Main window not found".to_string()),
+        };
         let _ = tx.send(res);
     }).map_err(|e| e.to_string())?;
 
@@ -108,15 +123,20 @@ pub async fn native_close_tab(
 
 #[tauri::command]
 pub async fn native_go_back(
-    window: WebviewWindow,
+    app: tauri::AppHandle,
     tab_id: String,
     tab_manager: State<'_, TabManager>,
 ) -> Result<(), String> {
     let tm = tab_manager.inner().clone();
-    let app = window.app_handle().clone();
+    let app_clone = app.clone();
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
-        let res = tm.go_back(&window, &tab_id);
+        let win = app_clone.get_window("main")
+            .or_else(|| app_clone.webview_windows().into_values().next().map(|w| w.as_ref().window().clone()));
+        let res = match win {
+            Some(w) => tm.go_back(&w, &tab_id),
+            None => Err("Main window not found".to_string()),
+        };
         let _ = tx.send(res);
     }).map_err(|e| e.to_string())?;
 
@@ -125,15 +145,20 @@ pub async fn native_go_back(
 
 #[tauri::command]
 pub async fn native_go_forward(
-    window: WebviewWindow,
+    app: tauri::AppHandle,
     tab_id: String,
     tab_manager: State<'_, TabManager>,
 ) -> Result<(), String> {
     let tm = tab_manager.inner().clone();
-    let app = window.app_handle().clone();
+    let app_clone = app.clone();
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
-        let res = tm.go_forward(&window, &tab_id);
+        let win = app_clone.get_window("main")
+            .or_else(|| app_clone.webview_windows().into_values().next().map(|w| w.as_ref().window().clone()));
+        let res = match win {
+            Some(w) => tm.go_forward(&w, &tab_id),
+            None => Err("Main window not found".to_string()),
+        };
         let _ = tx.send(res);
     }).map_err(|e| e.to_string())?;
 
@@ -142,15 +167,41 @@ pub async fn native_go_forward(
 
 #[tauri::command]
 pub async fn native_reload(
-    window: WebviewWindow,
+    app: tauri::AppHandle,
     tab_id: String,
     tab_manager: State<'_, TabManager>,
 ) -> Result<(), String> {
     let tm = tab_manager.inner().clone();
-    let app = window.app_handle().clone();
+    let app_clone = app.clone();
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
-        let res = tm.reload(&window, &tab_id);
+        let win = app_clone.get_window("main")
+            .or_else(|| app_clone.webview_windows().into_values().next().map(|w| w.as_ref().window().clone()));
+        let res = match win {
+            Some(w) => tm.reload(&w, &tab_id),
+            None => Err("Main window not found".to_string()),
+        };
+        let _ = tx.send(res);
+    }).map_err(|e| e.to_string())?;
+
+    rx.await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn native_close_all_tabs(
+    app: tauri::AppHandle,
+    tab_manager: State<'_, TabManager>,
+) -> Result<(), String> {
+    let tm = tab_manager.inner().clone();
+    let app_clone = app.clone();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let win = app_clone.get_window("main")
+            .or_else(|| app_clone.webview_windows().into_values().next().map(|w| w.as_ref().window().clone()));
+        let res = match win {
+            Some(w) => tm.close_all_tabs(&w),
+            None => Err("Main window not found".to_string()),
+        };
         let _ = tx.send(res);
     }).map_err(|e| e.to_string())?;
 

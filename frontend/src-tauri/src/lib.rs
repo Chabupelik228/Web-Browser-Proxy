@@ -6,14 +6,15 @@ pub mod tunnel;
 
 use browser::TabManager;
 use commands::*;
+use tauri::Manager;
 use tunnel::TunnelManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Единые аргументы для ВСЕХ WebView2 инстансов (устраняет ошибку 0x8007139F)
+    // Единые аргументы для ВСЕХ WebView2 инстансов (прокси + полное отключение автозаполнения, но БЕЗ incognito, чтобы куки сохранялись локально)
     std::env::set_var(
         "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-        "--proxy-server=http://127.0.0.1:11338 --proxy-bypass-list=127.0.0.1,localhost,tauri.localhost,web.chabupelik.su",
+        "--proxy-server=http://127.0.0.1:11338 --proxy-bypass-list=127.0.0.1,localhost,tauri.localhost,web.chabupelik.su --disable-features=AutofillServerCommunication,PasswordManager --disable-save-password-bubble --disable-single-click-autofill",
     );
 
     let tunnel_manager = TunnelManager::new();
@@ -45,10 +46,22 @@ pub fn run() {
             native_go_back,
             native_go_forward,
             native_reload,
+            native_close_all_tabs,
         ])
-        .on_window_event(|_window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                std::process::exit(0);
+        .on_window_event(|window, event| {
+            match event {
+                tauri::WindowEvent::CloseRequested { .. } => {
+                    std::process::exit(0);
+                }
+                tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
+                    let app = window.app_handle();
+                    let win = app.get_window("main").or_else(|| app.windows().into_values().next());
+                    if let Some(main_win) = win {
+                        let tab_mgr = app.state::<TabManager>();
+                        tab_mgr.sync_main_window_geometry(&main_win);
+                    }
+                }
+                _ => {}
             }
         })
         .run(tauri::generate_context!())
