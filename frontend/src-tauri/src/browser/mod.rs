@@ -144,6 +144,11 @@ impl TabManager {
                     let _ = wv.hide();
                 }
             }
+            
+            let mut active = self.active_tab_id.lock();
+            *active = Some(tab_id.to_string());
+            
+            return Err("NOT_FOUND".to_string());
         }
 
         let mut active = self.active_tab_id.lock();

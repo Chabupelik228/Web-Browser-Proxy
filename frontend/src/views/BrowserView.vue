@@ -261,15 +261,18 @@ watch(() => browserStore.tabs, () => {
   scheduleBackup();
 }, { deep: true });
 
-watch(() => browserStore.activeTabId, (newId) => {
+watch(() => browserStore.activeTabId, async (newId) => {
   const activeTab = browserStore.tabs.find(t => t.id === newId);
   if (activeTab) {
     inputUrl.value = activeTab.url || '';
     startPageInput.value = '';
-    if (activeTab.url && activeTab.url !== 'about:blank') {
-      invoke('native_navigate_tab', { tabId: newId, url: activeTab.url }).catch(console.error);
-    } else {
-      invoke('native_switch_tab', { tabId: newId }).catch(console.error);
+    try {
+      await invoke('native_switch_tab', { tabId: newId });
+    } catch (e) {
+      if (e === 'NOT_FOUND' && activeTab.url && activeTab.url !== 'about:blank') {
+        // Таб еще не создан в Rust (например, восстановлен из облака)
+        invoke('native_navigate_tab', { tabId: newId, url: activeTab.url }).catch(console.error);
+      }
     }
   }
 }, { immediate: true });
