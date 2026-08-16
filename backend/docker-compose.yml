@@ -19,8 +19,8 @@ services:
 
   scramjet:
     build:
-      context: ../  # Меняем контекст на корень проекта, чтобы Docker видел обе папки
-      dockerfile: backend/Dockerfile # Указываем путь к нашему Dockerfile
+      context: .
+      dockerfile: Dockerfile
     container_name: scramjet-proxy
     ports:
       - "127.0.0.1:9000:8080"
@@ -30,8 +30,9 @@ services:
       - db
       - redis
     restart: unless-stopped
+
   bot:
-    build: ../telegram_bot # Путь к папке бота относительно папки backend
+    build: ../telegram_bot
     container_name: scramjet-bot
     env_file:
       - ../telegram_bot/.env

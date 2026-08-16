@@ -2,113 +2,189 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import axios from 'axios';
-import { useCrypto } from '../composables/useCrypto';
-import { exportScramjetCookies, importScramjetCookies } from '../composables/useScramjetStorage';
+import { invoke } from '@tauri-apps/api/core';
 import { useBrowserStore } from './browser.store';
+
+const API_BASE = 'https://web.chabupelik.su';
+const WISP_URL = 'wss://web.chabupelik.su/wisp/';
 
 export const useAuthStore = defineStore('auth', () => {
     const user = ref(null);
     const accessToken = ref('');
-    const aesKey = ref(null);
+    const masterPassword = ref('');
+    const deviceId = ref('');
+    const proxyInfo = ref(null);
+    const isProxyReady = ref(false);
 
-    const { deriveKey, encryptData, decryptData } = useCrypto(); // <-- decryptData нужен реально
+    // Инициализация Device ID из Rust ядра
+    const initDeviceId = async () => {
+        try {
+            deviceId.value = await invoke('get_device_id');
+        } catch (e) {
+            console.warn('Не удалось получить Device ID из Rust, используем fallback:', e);
+            deviceId.value = 'desktop-fallback';
+        }
+    };
 
+    // 1. Вход по логину и паролю
     const login = async (username, password) => {
         try {
-            const { data } = await axios.post('/api/auth/login', { username, password });
-            accessToken.value = data.accessToken;
-            user.value = data.user;
-            aesKey.value = await deriveKey(password);
-            axios.defaults.headers.common['Authorization'] = `Bearer ${data.accessToken}`;
+            await initDeviceId();
+            const { data } = await axios.post(`${API_BASE}/api/auth/login`, {
+                username,
+                password,
+                device_id: deviceId.value,
+            });
 
-            await restoreSession(); // <-- новое: подтягиваем бэкап сразу после входа
+            if (data.status !== 'ok') return false;
+
+            const token = data.accessToken;
+            user.value = data.user;
+            masterPassword.value = password;
+            accessToken.value = token;
+            axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+
+            // Запускаем нативный Wisp-туннель в Rust
+            await startProxyTunnel(token);
+
+            // Восстанавливаем сохраненную сессию из облака
+            await restoreSession();
 
             return true;
         } catch (error) {
-            console.error('Ошибка входа:', error);
+            console.error('Ошибка входа по паролю:', error);
             return false;
         }
     };
 
-    // Восстановление куки + вкладок из зашифрованного бэкапа на сервере
+    // 2. Быстрый вход по 6-значному коду из Telegram
+    const loginWithOtp = async (code, fallbackPassword = '') => {
+        try {
+            await initDeviceId();
+            const { data } = await axios.post(`${API_BASE}/api/auth/otp/verify`, {
+                code,
+                device_id: deviceId.value,
+            });
+
+            if (data.status !== 'ok') return false;
+
+            const token = data.accessToken;
+            user.value = data.user;
+            masterPassword.value = fallbackPassword || code;
+            accessToken.value = token;
+            axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+
+            await startProxyTunnel(token);
+            await restoreSession();
+
+            return true;
+        } catch (error) {
+            console.error('Ошибка входа по OTP:', error);
+            return false;
+        }
+    };
+
+    // Запуск прокси-туннеля через Rust Core
+    const startProxyTunnel = async (token) => {
+        try {
+            const info = await invoke('start_tunnel', {
+                wispUrl: WISP_URL,
+                token: token,
+            });
+            proxyInfo.value = info;
+            isProxyReady.value = true;
+            console.log('[TAURI PROXY] Локальный прокси запущен:', info);
+        } catch (err) {
+            console.error('[TAURI PROXY ERROR] Ошибка запуска туннеля:', err);
+            isProxyReady.value = false;
+        }
+    };
+
+    // Восстановление зашифрованных вкладок из облака
     const restoreSession = async () => {
         try {
-            const { data } = await axios.get('/api/sync');
+            const { data } = await axios.get(`${API_BASE}/api/sync`);
             const payload = data?.data;
-            if (!payload || !payload.encrypted_cookies) return; // бэкапа ещё нет — первый вход
+            if (!payload) return;
 
-            const decryptedCookies = await decryptData(payload.encrypted_cookies, aesKey.value);
-            if (decryptedCookies) {
-                await importScramjetCookies(decryptedCookies);
-            }
-
-            const browserStore = useBrowserStore();
             if (Array.isArray(payload.open_tabs) && payload.open_tabs.length > 0) {
+                const browserStore = useBrowserStore();
                 browserStore.restoreTabs(payload.open_tabs);
             }
         } catch (e) {
             console.error('Не удалось восстановить сессию:', e);
-            // не критично — просто продолжаем с чистого состояния
         }
     };
 
-    const logout = async () => {
-        try {
-            await backupSession();
-            await axios.post('/api/auth/logout');
-        } catch (e) {
-            console.error('Ошибка сети при выходе:', e);
-        } finally {
-            try {
-                if (window.indexedDB && window.indexedDB.deleteDatabase) {
-                    window.indexedDB.deleteDatabase('$scramjet');
-                }
-            } catch (e) {
-                console.error('Ошибка удаления IndexedDB Scramjet:', e);
-            }
-
-            try {
-                const browserStore = useBrowserStore();
-                if (browserStore && typeof browserStore.clearUserSession === 'function') {
-                    await browserStore.clearUserSession();
-                }
-            } catch (e) {
-                console.error('Ошибка очистки стора браузера:', e);
-            }
-
-            user.value = null;
-            accessToken.value = '';
-            aesKey.value = null;
-            localStorage.clear();
-            sessionStorage.clear();
-            delete axios.defaults.headers.common['Authorization'];
-
-            window.location.reload();
-        }
-    };
-
-    // Зашифрованный бэкап РЕАЛЬНЫХ куки + вкладок перед выходом
+    // Сохранение сессии в облако (Zero-Knowledge)
     const backupSession = async () => {
-        if (!aesKey.value) return;
+        if (!accessToken.value) return;
 
         try {
             const browserStore = useBrowserStore();
-            const realOpenTabs = browserStore.tabs.map(tab => ({
+            const realOpenTabs = browserStore.tabs.map((tab) => ({
                 url: tab.url,
-                title: tab.title
+                title: tab.title,
             }));
 
-            const realCookies = await exportScramjetCookies(); // <-- настоящие куки, не заглушка
-            const encrypted = await encryptData(realCookies, aesKey.value);
+            let encryptedStr = null;
+            if (masterPassword.value) {
+                try {
+                    const encryptedObj = await invoke('encrypt_session_data', {
+                        dataJson: JSON.stringify({ tabs: realOpenTabs }),
+                        password: masterPassword.value,
+                    });
+                    encryptedStr = JSON.stringify(encryptedObj);
+                } catch (encErr) {
+                    console.warn('Шифрование сессии пропущено:', encErr);
+                }
+            }
 
-            await axios.post('/api/sync', {
-                encrypted_cookies: encrypted.payload,
+            await axios.post(`${API_BASE}/api/sync`, {
+                encrypted_cookies: encryptedStr,
                 open_tabs: realOpenTabs,
             });
         } catch (e) {
-            console.error('Ошибка создания бэкапа сессии:', e);
+            console.error('Ошибка сохранения сессии:', e);
         }
     };
 
-    return { user, accessToken, aesKey, login, logout, backupSession };
+    // Выход из сессии с зачисткой следов
+    const logout = async () => {
+        try {
+            await backupSession();
+            await axios.post(`${API_BASE}/api/auth/logout`);
+        } catch (e) {
+            console.error('Ошибка при выходе на сервере:', e);
+        } finally {
+            try {
+                await invoke('stop_tunnel');
+            } catch (_) {}
+
+            user.value = null;
+            accessToken.value = '';
+            masterPassword.value = '';
+            isProxyReady.value = false;
+            proxyInfo.value = null;
+            delete axios.defaults.headers.common['Authorization'];
+
+            const browserStore = useBrowserStore();
+            if (browserStore && typeof browserStore.clearUserSession === 'function') {
+                browserStore.clearUserSession();
+            }
+        }
+    };
+
+    return {
+        user,
+        accessToken,
+        deviceId,
+        proxyInfo,
+        isProxyReady,
+        login,
+        loginWithOtp,
+        logout,
+        backupSession,
+        restoreSession,
+    };
 });

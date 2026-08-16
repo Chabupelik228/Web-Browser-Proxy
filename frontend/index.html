@@ -1,34 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru" class="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Secure Browser</title>
-    
-    <!-- Автономный конфиг -->
-    <script src="/config.js" data-vite-no-bundle></script>
-    
-    <!-- Scramjet scripts (с атрибутами data-vite-no-bundle) -->
-    <script src="/scram/scramjet.all.js" data-vite-no-bundle></script>
-    <script type="module" src="/scram/scramjet.bundle.js" data-vite-no-bundle></script>
-    
-    <!-- Динамический импорт BareMux -->
-    <script data-vite-no-bundle>
-      const loadBareMux = new Function("return import('/baremux/index.js')");
-      
-      loadBareMux()
-        .then((module) => {
-          if (window.BareMux && Object.keys(window.BareMux).length > 0) {
-              return;
-          }
-          window.BareMux = module.BareMuxConnection ? module : (module.default || module);
-        })
-        .catch((err) => {
-          console.error('[BareMux] Ошибка динамической загрузки:', err);
-        });
-    </script>
+    <title>Chabupelik Browser</title>
   </head>
-  <body>
+  <body class="bg-[#08080a] text-zinc-100 overflow-hidden select-none">
     <div id="app"></div>
     <script type="module" src="/src/main.js"></script>
   </body>

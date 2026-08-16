@@ -1,0 +1,12 @@
+{
+  "name": "chabupelik-browser-root",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "tauri": "npm --prefix frontend exec -- tauri",
+    "tauri:dev": "npm --prefix frontend exec -- tauri dev",
+    "tauri:build": "npm --prefix frontend exec -- tauri build"
+  }
+}

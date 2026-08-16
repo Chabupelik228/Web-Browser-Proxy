@@ -1,41 +1,40 @@
 // frontend/src/stores/browser.store.js
 import { defineStore } from 'pinia';
 import { ref, watch } from 'vue';
-import { useAuthStore } from './auth.store';
 
 export const useBrowserStore = defineStore('browser', () => {
-  const authStore = useAuthStore();
-
-  // Динамический ключ в зависимости от логина пользователя
-  const getUserKey = (key) => {
-    const username = authStore.user?.username || authStore.username || 'guest';
-    return `chabupelik_${username}_${key}`;
-  };
-
   let tabIdCounter = 0;
   const generateTabId = () => `${Date.now()}_${tabIdCounter++}`;
 
   const loadSavedTabs = () => {
-    const saved = localStorage.getItem(getUserKey('tabs'));
-    return saved ? JSON.parse(saved) : [{ id: generateTabId(), url: '', title: 'Новая вкладка' }];
-  };
-
-  const loadSavedActiveId = () => {
-    const saved = localStorage.getItem(getUserKey('active_tab'));
-    return saved ? Number(saved) : null;
+    try {
+      const saved = localStorage.getItem('chabupelik_tabs');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map(t => ({
+            id: generateTabId(),
+            url: t.url || '',
+            title: t.title || 'Новая вкладка',
+            isLoading: false,
+          }));
+        }
+      }
+    } catch (_) {}
+    return [{ id: generateTabId(), url: '', title: 'Новая вкладка', isLoading: false }];
   };
 
   const tabs = ref(loadSavedTabs());
-  const activeTabId = ref(loadSavedActiveId() || tabs.value[0]?.id);
+  const activeTabId = ref(tabs.value[0].id);
 
-  // Автосохранение вкладок именно под текущим пользователем
   watch(tabs, (newTabs) => {
-    localStorage.setItem(getUserKey('tabs'), JSON.stringify(newTabs));
+    try {
+      localStorage.setItem(
+        'chabupelik_tabs',
+        JSON.stringify(newTabs.map(t => ({ url: t.url, title: t.title })))
+      );
+    } catch (_) {}
   }, { deep: true });
-
-  watch(activeTabId, (newId) => {
-    if (newId) localStorage.setItem(getUserKey('active_tab'), String(newId));
-  });
 
   const addTab = (url = '') => {
     const newTab = { id: generateTabId(), url, title: 'Новая вкладка', isLoading: false };
@@ -60,24 +59,11 @@ export const useBrowserStore = defineStore('browser', () => {
     activeTabId.value = id;
   };
 
-  // Метод полной зачистки при выходе
+  // Сбрасывает вкладки в памяти при выходе из аккаунта.
   const clearUserSession = async () => {
-    // 1. Очищаем сохраненные вкладки в localStorage
-    localStorage.removeItem(getUserKey('tabs'));
-    localStorage.removeItem(getUserKey('active_tab'));
-
-    // 2. Сбрасываем вкладки в памяти
+    localStorage.removeItem('chabupelik_tabs');
     tabs.value = [{ id: generateTabId(), url: '', title: 'Новая вкладка' }];
     activeTabId.value = tabs.value[0].id;
-
-    // 3. Полностью удаляем куки и сессии сайтов из IndexedDB
-    try {
-      if (window.indexedDB && window.indexedDB.deleteDatabase) {
-        window.indexedDB.deleteDatabase('$scramjet');
-      }
-    } catch (e) {
-      console.error('Ошибка очистки куки:', e);
-    }
   };
 
   const restoreTabs = (savedTabs) => {

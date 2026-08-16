@@ -3,6 +3,15 @@ export function useCrypto() {
   const enc = new TextEncoder();
   const dec = new TextDecoder();
 
+  function uint8ToBase64(bytes) {
+    let binary = '';
+    const chunkSize = 0x8000; // 32768 — безопасно ниже лимита аргументов функции
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+  }
+
   // Генерация 256-битного AES-GCM ключа на основе пароля юзера (KDF)
   const deriveKey = async (password, salt = 'scramjet-salt-static') => {
     const keyMaterial = await crypto.subtle.importKey(
@@ -31,22 +40,19 @@ export function useCrypto() {
   const encryptData = async (dataObject, aesKey) => {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const encodedData = enc.encode(JSON.stringify(dataObject));
-    
+
     const encryptedBuffer = await crypto.subtle.encrypt(
       { name: 'AES-GCM', iv },
       aesKey,
       encodedData
     );
 
-    // Конвертируем в Base64 для передачи по сети
-    const encryptedArray = Array.from(new Uint8Array(encryptedBuffer));
-    const encryptedBase64 = btoa(String.fromCharCode.apply(null, encryptedArray));
-    const ivBase64 = btoa(String.fromCharCode.apply(null, Array.from(iv)));
+    const encryptedBase64 = uint8ToBase64(new Uint8Array(encryptedBuffer)); // <-- было .apply на весь массив разом
+    const ivBase64 = uint8ToBase64(iv);
 
     return { payload: encryptedBase64, iv: ivBase64 };
   };
 
-  // Дешифрация данных, полученных с сервера
   const decryptData = async (encryptedBase64, ivBase64, aesKey) => {
     try {
       const encryptedBytes = Uint8Array.from(atob(encryptedBase64), c => c.charCodeAt(0));
