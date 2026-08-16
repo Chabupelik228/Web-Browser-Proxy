@@ -125,7 +125,7 @@ async fn handle_client_connection(
                     break;
                 }
             }
-            tx_clone.close(0x01).await;
+            let _ = tx_clone.close(0x01).await;
         });
 
         // Пересылка: Wisp Tunnel -> WebView2
@@ -137,7 +137,10 @@ async fn handle_client_connection(
             }
         });
 
-        let _ = tokio::join!(client_to_wisp, wisp_to_client);
+        tokio::select! {
+            _ = client_to_wisp => {},
+            _ = wisp_to_client => {},
+        }
     } else {
         // 3. Прямой HTTP запрос
         let (host, port) = parse_http_target(target, &request_str);
@@ -159,7 +162,7 @@ async fn handle_client_connection(
                     break;
                 }
             }
-            tx_clone.close(0x01).await;
+            let _ = tx_clone.close(0x01).await;
         });
 
         let wisp_to_client = tokio::spawn(async move {
@@ -170,7 +173,10 @@ async fn handle_client_connection(
             }
         });
 
-        let _ = tokio::join!(client_to_wisp, wisp_to_client);
+        tokio::select! {
+            _ = client_to_wisp => {},
+            _ = wisp_to_client => {},
+        }
     }
 
     Ok(())

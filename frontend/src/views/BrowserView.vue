@@ -352,7 +352,6 @@ onMounted(() => {
       if (browserStore.activeTabId === tabId) {
         inputUrl.value = url;
       }
-      browserStore.updateTab(tabId, { url });
     }
   });
 });
@@ -390,15 +389,24 @@ const processNavigation = async (tabId, targetUrl) => {
   const tab = browserStore.tabs.find(t => t.id === tabId);
   if (tab) {
     tab.isLoading = true;
+    tab.url = url;
   }
   
-  browserStore.updateTab(tabId, { url });
   if (tabId === browserStore.activeTabId) {
     inputUrl.value = url;
   }
   
   try {
     await invoke('native_navigate_tab', { tabId, url });
+    
+    // Fallback: снять загрузку через 15 секунд, если событие webview-loaded затерялось
+    setTimeout(() => {
+      const currentTab = browserStore.tabs.find(t => t.id === tabId);
+      if (currentTab && currentTab.isLoading) {
+        currentTab.isLoading = false;
+      }
+    }, 15000);
+    
   } catch (err) {
     console.error('Ошибка навигации нативного Webview:', err);
     if (tab) tab.isLoading = false;

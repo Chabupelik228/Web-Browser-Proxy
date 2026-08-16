@@ -53,15 +53,12 @@ impl TabManager {
 
         let app_handle = window.app_handle();
 
-        // 1. Если вкладка уже создана — переключаем ее, а навигацию выполняем только если URL изменился
+        // 1. Если вкладка уже создана — выполняем навигацию и переключаем
         if let Some(existing_wv) = app_handle.get_webview(&label) {
-            println!("[TAB_MANAGER] Found existing webview for {}.", label);
-            if let Ok(curr_url) = existing_wv.url() {
-                if let WebviewUrl::External(u) = &parsed_url {
-                    if curr_url.as_str() != u.as_str() {
-                        println!("[TAB_MANAGER] URL changed from {} to {}. Navigating...", curr_url, u);
-                        let _ = existing_wv.navigate(u.clone());
-                    }
+            println!("[TAB_MANAGER] Found existing webview for {}. Navigating to {:?}", label, parsed_url);
+            if let WebviewUrl::External(u) = &parsed_url {
+                if let Err(e) = existing_wv.navigate(u.clone()) {
+                    println!("[TAB_MANAGER] ERROR navigating webview: {:?}", e);
                 }
             }
             self.switch_to_tab(window, tab_id)?;
