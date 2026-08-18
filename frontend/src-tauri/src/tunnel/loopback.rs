@@ -16,9 +16,10 @@ pub struct LoopbackProxyServer {
 impl LoopbackProxyServer {
     /// Запускает локальный HTTP/CONNECT прокси на 127.0.0.1 с динамическим портом и секретом
     pub async fn start(wisp_client: WispClient) -> Result<Self, String> {
-        let listener = TcpListener::bind("127.0.0.1:11338")
+        let proxy_port = std::env::var("VITE_LOCAL_PROXY_PORT").expect("FATAL: VITE_LOCAL_PROXY_PORT is not set in .env");
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", proxy_port))
             .await
-            .map_err(|e| format!("Failed to bind local loopback listener: {}", e))?;
+            .unwrap_or_else(|e| panic!("FATAL: Failed to bind proxy port {}: {}", proxy_port, e));
 
         let port = listener
             .local_addr()
@@ -103,7 +104,7 @@ async fn handle_client_connection(
         println!("[LOOPBACK] HTTPS CONNECT к {}:{}", host, port);
 
         // Открываем TCP стрим через Wisp на VPS (Remote DNS)
-        let (_stream_id, mut wisp_rx, wisp_tx) = wisp_client.create_tcp_stream(&host, port).await?;
+        let mut wisp_stream = wisp_client.create_stream(&host, port).await?;
         println!("[LOOPBACK] WISP поток успешно создан для {}:{}", host, port);
 
         // Отвечаем браузеру, что туннель установлен
@@ -111,72 +112,18 @@ async fn handle_client_connection(
             .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
             .await?;
 
-        let (mut client_read, mut client_write) = client_stream.into_split();
-
-        // Пересылка: WebView2 -> Wisp Tunnel
-        let tx_clone = wisp_tx.clone();
-        let client_to_wisp = tokio::spawn(async move {
-            let mut read_buf = [0u8; 16384];
-            while let Ok(read_n) = client_read.read(&mut read_buf).await {
-                if read_n == 0 {
-                    break;
-                }
-                if tx_clone.send_data(&read_buf[..read_n]).await.is_err() {
-                    break;
-                }
-            }
-            let _ = tx_clone.close(0x01).await;
-        });
-
-        // Пересылка: Wisp Tunnel -> WebView2
-        let wisp_to_client = tokio::spawn(async move {
-            while let Some(chunk) = wisp_rx.recv().await {
-                if client_write.write_all(&chunk).await.is_err() {
-                    break;
-                }
-            }
-        });
-
-        tokio::select! {
-            _ = client_to_wisp => {},
-            _ = wisp_to_client => {},
-        }
+        // Пересылка: WebView2 <-> Wisp Tunnel
+        let _ = tokio::io::copy_bidirectional(&mut client_stream, &mut wisp_stream).await;
     } else {
         // 3. Прямой HTTP запрос
         let (host, port) = parse_http_target(target, &request_str);
-        let (_stream_id, mut wisp_rx, wisp_tx) = wisp_client.create_tcp_stream(&host, port).await?;
+        let mut wisp_stream = wisp_client.create_stream(&host, port).await?;
 
         // Отправляем изначальный HTTP запрос в стрим
-        wisp_tx.send_data(&buf[..n]).await?;
+        wisp_stream.write_all(&buf[..n]).await?;
 
-        let (mut client_read, mut client_write) = client_stream.into_split();
-
-        let tx_clone = wisp_tx.clone();
-        let client_to_wisp = tokio::spawn(async move {
-            let mut read_buf = [0u8; 16384];
-            while let Ok(read_n) = client_read.read(&mut read_buf).await {
-                if read_n == 0 {
-                    break;
-                }
-                if tx_clone.send_data(&read_buf[..read_n]).await.is_err() {
-                    break;
-                }
-            }
-            let _ = tx_clone.close(0x01).await;
-        });
-
-        let wisp_to_client = tokio::spawn(async move {
-            while let Some(chunk) = wisp_rx.recv().await {
-                if client_write.write_all(&chunk).await.is_err() {
-                    break;
-                }
-            }
-        });
-
-        tokio::select! {
-            _ = client_to_wisp => {},
-            _ = wisp_to_client => {},
-        }
+        // Пересылка: WebView2 <-> Wisp Tunnel
+        let _ = tokio::io::copy_bidirectional(&mut client_stream, &mut wisp_stream).await;
     }
 
     Ok(())

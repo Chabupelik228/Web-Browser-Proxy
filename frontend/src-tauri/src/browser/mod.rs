@@ -75,11 +75,115 @@ impl TabManager {
         let logical_size = window_size.to_logical::<f64>(scale_factor);
         let top_bar_height = *self.top_bar_height.lock();
         let content_height = (logical_size.height - top_bar_height).max(100.0);
-
         let t_id = tab_id.to_string();
+        let t_id_ipc = t_id.clone();
+        
+        let base_script = r#"
+                window.addEventListener('contextmenu', (e) => {
+                    e.preventDefault();
+                    let href = '';
+                    let src = '';
+                    let target = e.target;
+                    while (target && target !== document) {
+                        if (target.tagName === 'A' && target.href) href = target.href;
+                        if (target.tagName === 'IMG' && target.src) src = target.src;
+                        target = target.parentNode;
+                    }
+                    let selection = window.getSelection().toString();
+                    if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+                        window.__TAURI__.core.invoke('native_context_menu', {
+                            window: '{}',
+                            href: href,
+                            src: src,
+                            selection: selection
+                        }).catch(() => {
+                            if (window.chrome && window.chrome.webview) {
+                                window.chrome.webview.postMessage(JSON.stringify({
+                                    cmd: 'native_context_menu',
+                                    href: href,
+                                    src: src,
+                                    selection: selection
+                                }));
+                            }
+                        });
+                    } else if (window.chrome && window.chrome.webview) {
+                        window.chrome.webview.postMessage(JSON.stringify({
+                            cmd: 'native_context_menu',
+                            href: href,
+                            src: src,
+                            selection: selection
+                        }));
+                    }
+                });
+
+                // Track title changes reliably across all origins
+                const notifyTitle = () => {
+                    if (!document.title) return;
+                    const title = document.title;
+                    try {
+                        if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+                            window.__TAURI__.core.invoke('native_title_changed', {
+                                tabId: '{{TAB_ID}}',
+                                title: title
+                            }).catch(() => {});
+                        } else if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+                            window.__TAURI_INTERNALS__.invoke('native_title_changed', {
+                                tabId: '{{TAB_ID}}',
+                                title: title
+                            }).catch(() => {});
+                        }
+                    } catch (_) {}
+                };
+
+                let lastTitle = document.title;
+                const checkTitle = () => {
+                    if (document.title && document.title !== lastTitle) {
+                        lastTitle = document.title;
+                        notifyTitle();
+                    }
+                };
+                setInterval(checkTitle, 300);
+
+                window.addEventListener('DOMContentLoaded', notifyTitle);
+                window.addEventListener('load', notifyTitle);
+
+                // Track URL changes for SPAs
+                const notifyUrl = (url) => {
+                    try {
+                        if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+                            window.__TAURI__.core.invoke('native_url_changed', {
+                                tabId: '{{TAB_ID}}',
+                                url: url
+                            }).catch(() => {});
+                        } else if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+                            window.__TAURI_INTERNALS__.invoke('native_url_changed', {
+                                tabId: '{{TAB_ID}}',
+                                url: url
+                            }).catch(() => {});
+                        }
+                    } catch (_) {}
+                    setTimeout(notifyTitle, 200);
+                };
+                window.addEventListener('popstate', () => notifyUrl(window.location.href));
+                const originalPushState = history.pushState;
+                history.pushState = function() {
+                    originalPushState.apply(this, arguments);
+                    notifyUrl(window.location.href);
+                };
+                const originalReplaceState = history.replaceState;
+                history.replaceState = function() {
+                    originalReplaceState.apply(this, arguments);
+                    notifyUrl(window.location.href);
+                };
+        "#;
+        let init_script = base_script.replace("{{TAB_ID}}", &t_id_ipc);
+
+        let t_id_load = t_id.clone();
         let builder = WebviewBuilder::new(&label, parsed_url)
-            .on_page_load(move |webview, payload| {
+            .initialization_script(&init_script)
+            .on_page_load(move |webview, _payload| {
                 if let Ok(url) = webview.url() {
+                    #[allow(non_snake_case)]
                     #[derive(serde::Serialize, Clone)]
                     struct Payload {
                         tabId: String,
@@ -89,6 +193,48 @@ impl TabManager {
                         tabId: t_id.clone(),
                         url: url.to_string(),
                     });
+
+                    // Trigger title evaluation on load
+                    let script = format!(r#"
+                        (function() {{
+                            const t = document.title;
+                            if (t) {{
+                                if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {{
+                                    window.__TAURI__.core.invoke('native_title_changed', {{ tabId: '{}', title: t }});
+                                }} else if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+                                    window.__TAURI_INTERNALS__.invoke('native_title_changed', {{ tabId: '{}', title: t }});
+                                }}
+                            }}
+                        }})();
+                    "#, t_id_load, t_id_load);
+                    let _ = webview.eval(&script);
+                }
+            })
+            .on_download(move |webview, event| {
+                match event {
+                    tauri::webview::DownloadEvent::Requested { url, destination } => {
+                        println!("[DOWNLOAD] Requested: {:?} -> {:?}", url, destination);
+                        let file_name = url.path_segments()
+                            .and_then(|s| s.last())
+                            .unwrap_or("download")
+                            .to_string();
+                        
+                        #[derive(serde::Serialize, Clone)]
+                        #[allow(non_snake_case)]
+                        struct DlPayload {
+                            tabId: String,
+                            url: String,
+                            filename: String,
+                        }
+                        use tauri::Emitter;
+                        let _ = webview.emit("webview-download-started", DlPayload {
+                            tabId: String::new(),
+                            url: url.to_string(),
+                            filename: file_name,
+                        });
+                        true
+                    }
+                    _ => true
                 }
             });
 
@@ -204,6 +350,18 @@ impl TabManager {
             *active = None;
         }
 
+        Ok(())
+    }
+
+    /// Устанавливает масштаб веб-страницы для конкретной вкладки
+    pub fn set_zoom(&self, window: &tauri::Window, tab_id: &str, zoom_factor: f64) -> Result<(), String> {
+        let app_handle = window.app_handle();
+        let tabs_map = self.tabs.lock();
+        if let Some(label) = tabs_map.get(tab_id) {
+            if let Some(wv) = app_handle.get_webview(label) {
+                let _ = wv.set_zoom(zoom_factor);
+            }
+        }
         Ok(())
     }
 

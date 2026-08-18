@@ -19,6 +19,20 @@
         "resizable": true,
         "fullscreen": false,
         "decorations": false
+      },
+      {
+        "label": "downloads-widget",
+        "url": "/?widget=downloads",
+        "title": "Загрузки",
+        "width": 320,
+        "height": 400,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false,
+        "visible": false
       }
     ],
     "security": {

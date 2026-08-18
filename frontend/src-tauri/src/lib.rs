@@ -11,10 +11,21 @@ use tunnel::TunnelManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Единые аргументы для ВСЕХ WebView2 инстансов (прокси + полное отключение автозаполнения, но БЕЗ incognito, чтобы куки сохранялись локально)
+    // Загружаем переменные окружения
+    dotenvy::from_path("../.env").expect("FATAL: .env file is missing in frontend/");
+    
+    let proxy_port = std::env::var("VITE_LOCAL_PROXY_PORT").expect("FATAL: VITE_LOCAL_PROXY_PORT is not set in .env");
+    let api_domain = std::env::var("VITE_API_DOMAIN").expect("FATAL: VITE_API_DOMAIN is not set in .env");
+
+    let proxy_args = format!(
+        "--proxy-server=http://127.0.0.1:{} --proxy-bypass-list=127.0.0.1,localhost,tauri.localhost,{} --disable-features=AutofillServerCommunication,PasswordManager --disable-save-password-bubble --disable-single-click-autofill",
+        proxy_port, api_domain
+    );
+
+    // Единые аргументы для ВСЕХ WebView2 инстансов
     std::env::set_var(
         "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-        "--proxy-server=http://127.0.0.1:11338 --proxy-bypass-list=127.0.0.1,localhost,tauri.localhost,web.chabupelik.su --disable-features=AutofillServerCommunication,PasswordManager --disable-save-password-bubble --disable-single-click-autofill",
+        proxy_args,
     );
 
     let tunnel_manager = TunnelManager::new();
@@ -51,7 +62,16 @@ pub fn run() {
             native_minimize_window,
             native_maximize_window,
             native_close_window,
+            native_close_window_by_label,
             native_start_dragging,
+            native_title_changed,
+            native_context_menu,
+            native_url_changed,
+            native_set_zoom,
+            native_download_started,
+            native_open_path,
+            native_show_in_folder,
+            native_get_downloads_dir,
         ])
         .on_window_event(|window, event| {
             match event {

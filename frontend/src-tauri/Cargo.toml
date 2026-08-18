@@ -42,3 +42,4 @@ base64 = "0.22"
 
 # Сбор информации о системе для Device Fingerprint
 sysinfo = "0.33"
+dotenvy = "0.15.7"

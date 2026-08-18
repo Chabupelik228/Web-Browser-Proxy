@@ -5,8 +5,12 @@ import axios from 'axios';
 import { invoke } from '@tauri-apps/api/core';
 import { useBrowserStore } from './browser.store';
 
-const API_BASE = 'https://web.chabupelik.su';
-const WISP_URL = 'wss://web.chabupelik.su/wisp/';
+const API_BASE = import.meta.env.VITE_API_BASE;
+const WISP_URL = import.meta.env.VITE_WISP_URL;
+
+if (!API_BASE || !WISP_URL) {
+    throw new Error("Missing VITE_API_BASE or VITE_WISP_URL in frontend .env");
+}
 
 export const useAuthStore = defineStore('auth', () => {
     const user = ref(null);
@@ -73,6 +77,12 @@ export const useAuthStore = defineStore('auth', () => {
             masterPassword.value = fallbackPassword || code;
             accessToken.value = token;
             axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+
+            localStorage.setItem('chabupelik_session', JSON.stringify({
+                accessToken: token,
+                user: data.user,
+                masterPassword: masterPassword.value,
+            }));
 
             await startProxyTunnel(token);
             await restoreSession();

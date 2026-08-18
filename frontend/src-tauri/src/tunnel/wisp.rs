@@ -1,179 +1,240 @@
-// frontend/src-tauri/src/tunnel/wisp.rs
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use futures_util::{SinkExt, StreamExt};
-use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::io::Cursor;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use tokio::sync::mpsc;
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::sync::{mpsc, Mutex};
+use tokio_tungstenite::client_async_tls;
+use tokio_tungstenite::tungstenite::handshake::client::Request;
+use tokio_tungstenite::tungstenite::protocol::Message;
+use url::Url;
 
-const WISP_TYPE_CONNECT: u8 = 0x01;
-const WISP_TYPE_DATA: u8 = 0x02;
-const WISP_TYPE_CONTINUE: u8 = 0x03;
-const WISP_TYPE_CLOSE: u8 = 0x04;
-const _WISP_TYPE_INFO: u8 = 0x05;
+pub const WISP_TYPE_CONNECT: u8 = 0x01;
+pub const WISP_TYPE_DATA: u8 = 0x02;
+pub const WISP_TYPE_CLOSE: u8 = 0x03;
+pub const WISP_STREAM_TCP: u8 = 0x01;
 
-const STREAM_TYPE_TCP: u8 = 0x01;
-
-/// Клиент мультиплексированного Wisp-туннеля
 #[derive(Clone)]
 pub struct WispClient {
-    tx_to_ws: mpsc::Sender<Vec<u8>>,
-    stream_counter: Arc<AtomicU32>,
-    active_streams: Arc<Mutex<HashMap<u32, mpsc::Sender<Vec<u8>>>>>,
+    ws_tx: mpsc::Sender<Message>,
+    stream_channels: Arc<Mutex<HashMap<u32, mpsc::Sender<Vec<u8>>>>>,
+    next_stream_id: Arc<Mutex<u32>>,
 }
 
 impl WispClient {
-    /// Устанавливает зашифрованное WebSocket-соединение с Wisp сервером на VPS
     pub async fn connect(wisp_url: &str) -> Result<Self, String> {
-        let (ws_stream, _) = connect_async(wisp_url)
+        let parsed_url = Url::parse(wisp_url).map_err(|e| format!("Некорректный WISP URL: {}", e))?;
+        let host = parsed_url.host_str().ok_or("Отсутствует хост в WISP URL")?.to_string();
+        let port = parsed_url.port_or_known_default().unwrap_or(443);
+
+        // Проверяем наличие апстрим-прокси (ЕСПД / локальный Squid)
+        let upstream_proxy = std::env::var("UPSTREAM_PROXY")
+            .or_else(|_| std::env::var("HTTPS_PROXY"))
+            .or_else(|_| std::env::var("HTTP_PROXY"))
+            .ok();
+
+        let tcp_stream = if let Some(ref proxy_str) = upstream_proxy {
+            let proxy_clean = proxy_str.trim_start_matches("http://").trim_start_matches("https://");
+            let (p_host, p_port) = proxy_clean
+                .split_once(':')
+                .map(|(h, p)| (h, p.parse::<u16>().unwrap_or(3128)))
+                .unwrap_or((proxy_clean, 3128));
+
+            log::info!("[WISP] Подключение через апстрим-прокси {}:{} к {}:{}", p_host, p_port, host, port);
+
+            let mut stream = TcpStream::connect((p_host, p_port))
+                .await
+                .map_err(|e| format!("Не удалось подключиться к прокси {}:{}: {}", p_host, p_port, e))?;
+
+            let connect_req = format!(
+                "CONNECT {}:{} HTTP/1.1\r\nHost: {}:{}\r\nProxy-Connection: Keep-Alive\r\n\r\n",
+                host, port, host, port
+            );
+            stream
+                .write_all(connect_req.as_bytes())
+                .await
+                .map_err(|e| format!("Ошибка отправки CONNECT в прокси: {}", e))?;
+
+            let mut resp_buf = [0u8; 1024];
+            let n = stream
+                .read(&mut resp_buf)
+                .await
+                .map_err(|e| format!("Ошибка чтения ответа от прокси: {}", e))?;
+
+            let resp_str = String::from_utf8_lossy(&resp_buf[..n]);
+            if !resp_str.starts_with("HTTP/1.1 200") && !resp_str.starts_with("HTTP/1.0 200") {
+                return Err(format!("Прокси отклонил CONNECT туннель: {}", resp_str));
+            }
+
+            stream
+        } else {
+            TcpStream::connect((host.as_str(), port))
+                .await
+                .map_err(|e| format!("Не удалось подключиться к WISP хосту напрямую {}:{}: {}", host, port, e))?
+        };
+
+        // Устанавливаем TLS и поднимаем WebSocket
+        let request = Request::builder()
+            .uri(wisp_url)
+            .header("Host", host.as_str())
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Sec-WebSocket-Key", tokio_tungstenite::tungstenite::handshake::client::generate_key())
+            .body(())
+            .map_err(|e| format!("Ошибка формирования WebSocket запроса: {}", e))?;
+
+        let (ws_stream, _) = client_async_tls(request, tcp_stream)
             .await
-            .map_err(|e| format!("Wisp connection failed: {}", e))?;
+            .map_err(|e| format!("Не удалось выполнить WebSocket handshake: {}", e))?;
 
         let (mut ws_sink, mut ws_source) = ws_stream.split();
-        let (tx_to_ws, mut rx_from_client) = mpsc::channel::<Vec<u8>>(1024);
+        let (tx, mut rx) = mpsc::channel::<Message>(1000);
 
-        let active_streams = Arc::new(Mutex::new(HashMap::<u32, mpsc::Sender<Vec<u8>>>::new()));
-        let streams_for_reader = active_streams.clone();
+        let stream_channels = Arc::new(Mutex::new(HashMap::<u32, mpsc::Sender<Vec<u8>>>::new()));
+        let stream_channels_rx = stream_channels.clone();
 
-        // 1. Фоновая задача отправки пакетов в WebSocket
         tokio::spawn(async move {
-            while let Some(packet) = rx_from_client.recv().await {
-                if let Err(e) = ws_sink.send(Message::Binary(packet.into())).await {
-                    log::error!("[WISP] Ошибка отправки пакета в WebSocket: {:?}", e);
+            while let Some(msg) = rx.recv().await {
+                if ws_sink.send(msg).await.is_err() {
                     break;
                 }
             }
         });
 
-        // 2. Фоновая задача приема и демультиплексирования пакетов из WebSocket
         tokio::spawn(async move {
-            while let Some(msg_res) = ws_source.next().await {
-                match msg_res {
-                    Ok(Message::Binary(bytes)) => {
-                        if bytes.len() < 5 {
-                            continue;
-                        }
-                        let packet_type = bytes[0];
-                        let mut cursor = Cursor::new(&bytes[1..5]);
-                        let stream_id = cursor.read_u32::<LittleEndian>().unwrap_or(0);
+            while let Some(Ok(msg)) = ws_source.next().await {
+                if let Message::Binary(data) = msg {
+                    if data.len() < 5 {
+                        continue;
+                    }
 
-                        match packet_type {
-                            WISP_TYPE_DATA => {
-                                let payload = bytes[5..].to_vec();
-                                let sender = {
-                                    let map = streams_for_reader.lock();
-                                    map.get(&stream_id).cloned()
-                                };
-                                if let Some(tx) = sender {
-                                    let _ = tx.send(payload).await;
-                                }
-                            }
-                            WISP_TYPE_CONTINUE => {
-                                // Flow control подтверждение от сервера
-                                log::trace!("[WISP] Получен CONTINUE для stream_id: {}", stream_id);
-                            }
-                            WISP_TYPE_CLOSE => {
-                                log::debug!("[WISP] Получен сигнал закрытия потока #{}", stream_id);
-                                let mut map = streams_for_reader.lock();
-                                map.remove(&stream_id);
-                            }
-                            _ => {}
+                    let packet_type = data[0];
+                    let mut cursor = Cursor::new(&data[1..5]);
+                    let stream_id = byteorder::ReadBytesExt::read_u32::<LittleEndian>(&mut cursor).unwrap_or(0);
+
+                    if packet_type == WISP_TYPE_DATA {
+                        let payload = data[5..].to_vec();
+                        let channels = stream_channels_rx.lock().await;
+                        if let Some(ch) = channels.get(&stream_id) {
+                            let _ = ch.send(payload).await;
                         }
+                    } else if packet_type == WISP_TYPE_CLOSE {
+                        let mut channels = stream_channels_rx.lock().await;
+                        channels.remove(&stream_id);
                     }
-                    Ok(Message::Close(_)) => {
-                        log::warn!("[WISP] Сервер закрыл WebSocket соединение");
-                        break;
-                    }
-                    Err(e) => {
-                        log::error!("[WISP] Ошибка чтения из WebSocket: {:?}", e);
-                        break;
-                    }
-                    _ => {}
                 }
             }
-            // Очищаем все активные потоки при разрыве сокета
-            streams_for_reader.lock().clear();
         });
 
         Ok(Self {
-            tx_to_ws,
-            stream_counter: Arc::new(AtomicU32::new(1)),
-            active_streams,
+            ws_tx: tx,
+            stream_channels,
+            next_stream_id: Arc::new(Mutex::new(1)),
         })
     }
 
-    /// Открывает новый TCP-стрим через Wisp (Remote DNS + Connect)
-    pub async fn create_tcp_stream(
-        &self,
-        host: &str,
-        port: u16,
-    ) -> Result<(u32, mpsc::Receiver<Vec<u8>>, WispStreamSender), String> {
-        let stream_id = self.stream_counter.fetch_add(1, Ordering::SeqCst);
-
-        let (stream_tx, stream_rx) = mpsc::channel::<Vec<u8>>(512);
-        {
-            let mut map = self.active_streams.lock();
-            map.insert(stream_id, stream_tx);
-        }
-
-        // Формируем WISP CONNECT пакет: [0x01][stream_id (4B)][stream_type (1B)][port (2B)][host]
-        let mut connect_pkt = Vec::with_capacity(1 + 4 + 1 + 2 + host.len());
-        connect_pkt.push(WISP_TYPE_CONNECT);
-        connect_pkt.write_u32::<LittleEndian>(stream_id).unwrap();
-        connect_pkt.push(STREAM_TYPE_TCP);
-        connect_pkt.write_u16::<LittleEndian>(port).unwrap();
-        connect_pkt.extend_from_slice(host.as_bytes());
-
-        self.tx_to_ws
-            .send(connect_pkt)
-            .await
-            .map_err(|e| format!("Failed to send WISP CONNECT: {}", e))?;
-
-        let sender = WispStreamSender {
-            stream_id,
-            tx_to_ws: self.tx_to_ws.clone(),
-            active_streams: self.active_streams.clone(),
+    pub async fn create_stream(&self, host: &str, port: u16) -> Result<WispStream, String> {
+        let stream_id = {
+            let mut id = self.next_stream_id.lock().await;
+            let current = *id;
+            *id += 1;
+            current
         };
 
-        Ok((stream_id, stream_rx, sender))
-    }
-}
+        let (data_tx, data_rx) = mpsc::channel::<Vec<u8>>(500);
+        {
+            let mut channels = self.stream_channels.lock().await;
+            channels.insert(stream_id, data_tx);
+        }
 
-/// Структура для отправки данных в конкретный Wisp-стрим
-#[derive(Clone)]
-pub struct WispStreamSender {
-    stream_id: u32,
-    tx_to_ws: mpsc::Sender<Vec<u8>>,
-    active_streams: Arc<Mutex<HashMap<u32, mpsc::Sender<Vec<u8>>>>>,
-}
+        let mut packet = Vec::new();
+        packet.push(WISP_TYPE_CONNECT);
+        byteorder::WriteBytesExt::write_u32::<LittleEndian>(&mut packet, stream_id).unwrap();
+        packet.push(WISP_STREAM_TCP);
+        byteorder::WriteBytesExt::write_u16::<LittleEndian>(&mut packet, port).unwrap();
+        packet.extend_from_slice(host.as_bytes());
 
-impl WispStreamSender {
-    /// Отправляет данные (WISP DATA) в туннель
-    pub async fn send_data(&self, payload: &[u8]) -> Result<(), String> {
-        let mut data_pkt = Vec::with_capacity(1 + 4 + payload.len());
-        data_pkt.push(WISP_TYPE_DATA);
-        data_pkt.write_u32::<LittleEndian>(self.stream_id).unwrap();
-        data_pkt.extend_from_slice(payload);
-
-        self.tx_to_ws
-            .send(data_pkt)
+        self.ws_tx
+            .send(Message::Binary(packet.into()))
             .await
-            .map_err(|e| format!("Failed to send WISP DATA: {}", e))
+            .map_err(|e| format!("Ошибка отправки CONNECT в WISP: {}", e))?;
+
+        Ok(WispStream {
+            stream_id,
+            ws_tx: self.ws_tx.clone(),
+            data_rx,
+            read_buffer: Vec::new(),
+        })
+    }
+}
+
+pub struct WispStream {
+    stream_id: u32,
+    ws_tx: mpsc::Sender<Message>,
+    data_rx: mpsc::Receiver<Vec<u8>>,
+    read_buffer: Vec<u8>,
+}
+
+impl tokio::io::AsyncRead for WispStream {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        if !self.read_buffer.is_empty() {
+            let to_read = std::cmp::min(buf.remaining(), self.read_buffer.len());
+            buf.put_slice(&self.read_buffer[..to_read]);
+            self.read_buffer.drain(..to_read);
+            return std::task::Poll::Ready(Ok(()));
+        }
+
+        match self.data_rx.poll_recv(cx) {
+            std::task::Poll::Ready(Some(data)) => {
+                let to_read = std::cmp::min(buf.remaining(), data.len());
+                buf.put_slice(&data[..to_read]);
+                if to_read < data.len() {
+                    self.read_buffer.extend_from_slice(&data[to_read..]);
+                }
+                std::task::Poll::Ready(Ok(()))
+            }
+            std::task::Poll::Ready(None) => std::task::Poll::Ready(Ok(())),
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
+    }
+}
+
+impl tokio::io::AsyncWrite for WispStream {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<Result<usize, std::io::Error>> {
+        let mut packet = Vec::with_capacity(5 + buf.len());
+        packet.push(WISP_TYPE_DATA);
+        byteorder::WriteBytesExt::write_u32::<LittleEndian>(&mut packet, self.stream_id).unwrap();
+        packet.extend_from_slice(buf);
+
+        match self.ws_tx.try_send(Message::Binary(packet.into())) {
+            Ok(_) => std::task::Poll::Ready(Ok(buf.len())),
+            Err(mpsc::error::TrySendError::Full(_)) => std::task::Poll::Pending,
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                std::task::Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "WISP channel closed")))
+            }
+        }
     }
 
-    /// Закрывает стрим (WISP CLOSE)
-    pub async fn close(&self, reason: u8) {
-        let mut close_pkt = Vec::with_capacity(1 + 4 + 1);
-        close_pkt.push(WISP_TYPE_CLOSE);
-        close_pkt.write_u32::<LittleEndian>(self.stream_id).unwrap();
-        close_pkt.push(reason);
+    fn poll_flush(self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), std::io::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
 
-        let _ = self.tx_to_ws.send(close_pkt).await;
-
-        let mut map = self.active_streams.lock();
-        map.remove(&self.stream_id);
+    fn poll_shutdown(self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), std::io::Error>> {
+        let mut packet = Vec::with_capacity(5);
+        packet.push(WISP_TYPE_CLOSE);
+        byteorder::WriteBytesExt::write_u32::<LittleEndian>(&mut packet, self.stream_id).unwrap();
+        let _ = self.ws_tx.try_send(Message::Binary(packet.into()));
+        std::task::Poll::Ready(Ok(()))
     }
 }

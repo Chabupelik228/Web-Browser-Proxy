@@ -1,0 +1,35 @@
+"$schema" = "../gen/schemas/desktop-schema.json"
+
+[[permission]]
+identifier = "allow-app-commands"
+description = "Enables all app commands"
+commands.allow = [
+    "get_device_id",
+    "start_tunnel",
+    "stop_tunnel",
+    "get_tunnel_status",
+    "encrypt_session_data",
+    "decrypt_session_data",
+    "native_open_new_window",
+    "native_navigate_tab",
+    "native_switch_tab",
+    "native_close_tab",
+    "native_go_back",
+    "native_go_forward",
+    "native_reload",
+    "native_close_all_tabs",
+    "native_update_top_bar_height",
+    "native_minimize_window",
+    "native_maximize_window",
+    "native_close_window",
+    "native_close_window_by_label",
+    "native_start_dragging",
+    "native_title_changed",
+    "native_context_menu",
+    "native_url_changed",
+    "native_set_zoom",
+    "native_download_started",
+    "native_open_path",
+    "native_show_in_folder",
+    "native_get_downloads_dir"
+]

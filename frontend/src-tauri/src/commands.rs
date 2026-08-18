@@ -252,3 +252,120 @@ pub fn native_start_dragging(app: tauri::AppHandle) {
         let _ = win.start_dragging();
     }
 }
+
+#[tauri::command]
+pub fn native_title_changed(app: tauri::AppHandle, tab_id: String, title: String) {
+    #[derive(serde::Serialize, Clone)]
+    struct TitlePayload {
+        tab_id: String,
+        title: String,
+    }
+    use tauri::Emitter;
+    let _ = app.emit("webview-title-changed", TitlePayload { tab_id, title });
+}
+
+#[tauri::command]
+pub fn native_context_menu(app: tauri::AppHandle, window: String, href: String, src: String, selection: String) {
+    println!("Context menu: window={}, href={}, src={}, selection={}", window, href, src, selection);
+}
+
+#[tauri::command]
+pub fn native_close_window_by_label(app: tauri::AppHandle, label: String) {
+    if let Some(win) = app.get_window(&label) {
+        let _ = win.close();
+    }
+}
+
+#[tauri::command]
+pub fn native_url_changed(app: tauri::AppHandle, tab_id: String, url: String) {
+    #[derive(serde::Serialize, Clone)]
+    #[allow(non_snake_case)]
+    struct UrlPayload {
+        tabId: String,
+        url: String,
+    }
+    use tauri::Emitter;
+    // Emit webview-loaded so frontend updates the URL and stops loading spinner
+    let _ = app.emit("webview-loaded", UrlPayload { tabId: tab_id, url });
+}
+
+#[tauri::command]
+pub fn native_set_zoom(
+    app: tauri::AppHandle,
+    tab_id: String,
+    zoom_factor: f64,
+    tab_manager: State<'_, TabManager>,
+) -> Result<(), String> {
+    if let Some(win) = app.get_window("main").or_else(|| app.windows().into_values().next().map(|w| w.clone())) {
+        tab_manager.set_zoom(&win, &tab_id, zoom_factor)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn native_download_started(
+    app: tauri::AppHandle,
+    tab_id: String,
+    url: String,
+    filename: String,
+) {
+    #[derive(serde::Serialize, Clone)]
+    #[allow(non_snake_case)]
+    struct DownloadPayload {
+        tabId: String,
+        url: String,
+        filename: String,
+    }
+    use tauri::Emitter;
+    let _ = app.emit("webview-download-started", DownloadPayload {
+        tabId: tab_id,
+        url,
+        filename,
+    });
+}
+
+#[tauri::command]
+pub fn native_open_path(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+pub fn native_show_in_folder(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg("/select,")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+pub fn native_get_downloads_dir() -> String {
+    if let Ok(user_profile) = std::env::var("USERPROFILE") {
+        let downloads = std::path::Path::new(&user_profile).join("Downloads");
+        if downloads.exists() {
+            return downloads.to_string_lossy().to_string();
+        }
+    }
+    ".".to_string()
+}
