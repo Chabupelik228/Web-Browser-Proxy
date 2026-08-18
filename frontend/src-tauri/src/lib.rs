@@ -65,6 +65,7 @@ pub fn run() {
             native_close_window_by_label,
             native_start_dragging,
             native_title_changed,
+            native_favicon_changed,
             native_context_menu,
             native_url_changed,
             native_set_zoom,

@@ -548,6 +548,16 @@ onMounted(() => {
     }
   });
 
+  listen('webview-favicon-changed', (event) => {
+    const { tab_id, favicon } = event.payload || {};
+    if (tab_id && favicon) {
+      const tab = browserStore.tabs.find(t => t.id === tab_id);
+      if (tab) {
+        tab.favicon = favicon;
+      }
+    }
+  });
+
   listen('webview-download-started', (event) => {
     const { tabId, url, filename } = event.payload || {};
     handleNewDownload({ url, filename: filename || 'file' });
@@ -709,6 +719,8 @@ const addNewTab = () => {
 
 const getTabFavicon = (tab) => {
   if (failedFavicons.value.has(tab.id) || !tab.url || tab.url.startsWith('about:')) return null;
+  if (tab.favicon) return tab.favicon; // Использовать нативную иконку, если есть
+  
   try {
     const url = new URL(tab.url);
     return `https://www.google.com/s2/favicons?domain=${url.hostname}&sz=128`;

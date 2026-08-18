@@ -142,7 +142,58 @@ impl TabManager {
                         notifyTitle();
                     }
                 };
-                setInterval(checkTitle, 300);
+
+                const notifyFavicon = () => {
+                    let icon = '';
+                    const links = document.querySelectorAll('link[rel="icon"], link[rel="shortcut icon"], link[rel="apple-touch-icon"]');
+                    if (links.length > 0) {
+                        for (let i = links.length - 1; i >= 0; i--) {
+                            if (links[i].href) {
+                                icon = links[i].href;
+                                break;
+                            }
+                        }
+                    }
+                    if (!icon) {
+                        icon = window.location.origin + '/favicon.ico';
+                    }
+                    try {
+                        if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+                            window.__TAURI__.core.invoke('native_favicon_changed', {
+                                tabId: '{{TAB_ID}}',
+                                favicon: icon
+                            }).catch(() => {});
+                        } else if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+                            window.__TAURI_INTERNALS__.invoke('native_favicon_changed', {
+                                tabId: '{{TAB_ID}}',
+                                favicon: icon
+                            }).catch(() => {});
+                        }
+                    } catch (_) {}
+                };
+
+                let lastFavicon = '';
+                const checkFavicon = () => {
+                    const links = document.querySelectorAll('link[rel="icon"], link[rel="shortcut icon"], link[rel="apple-touch-icon"]');
+                    let currentFavicon = window.location.origin + '/favicon.ico';
+                    if (links.length > 0) {
+                        for (let i = links.length - 1; i >= 0; i--) {
+                            if (links[i].href) {
+                                currentFavicon = links[i].href;
+                                break;
+                            }
+                        }
+                    }
+                    if (currentFavicon !== lastFavicon) {
+                        lastFavicon = currentFavicon;
+                        notifyFavicon();
+                    }
+                };
+
+                setInterval(() => {
+                    checkTitle();
+                    checkFavicon();
+                }, 1000);
 
                 window.addEventListener('DOMContentLoaded', notifyTitle);
                 window.addEventListener('load', notifyTitle);

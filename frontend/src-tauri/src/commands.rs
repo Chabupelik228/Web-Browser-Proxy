@@ -265,6 +265,17 @@ pub fn native_title_changed(app: tauri::AppHandle, tab_id: String, title: String
 }
 
 #[tauri::command]
+pub fn native_favicon_changed(app: tauri::AppHandle, tab_id: String, favicon: String) {
+    #[derive(serde::Serialize, Clone)]
+    struct FaviconPayload {
+        tab_id: String,
+        favicon: String,
+    }
+    use tauri::Emitter;
+    let _ = app.emit("webview-favicon-changed", FaviconPayload { tab_id, favicon });
+}
+
+#[tauri::command]
 pub fn native_context_menu(app: tauri::AppHandle, window: String, href: String, src: String, selection: String) {
     println!("Context menu: window={}, href={}, src={}, selection={}", window, href, src, selection);
 }
