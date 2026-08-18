@@ -79,6 +79,8 @@ impl TabManager {
         let t_id_ipc = t_id.clone();
         
         let base_script = r#"
+                if (window !== window.top) return;
+
                 window.addEventListener('contextmenu', (e) => {
                     e.preventDefault();
                     let href = '';
@@ -233,6 +235,14 @@ impl TabManager {
         let builder = WebviewBuilder::new(&label, parsed_url)
             .initialization_script(&init_script)
             .on_page_load(move |webview, _payload| {
+                // Автоматическая перезагрузка при первом открытии вкладки в сессии (решает проблему белого экрана ChatGPT/YouTube)
+                let _ = webview.eval(r#"
+                    if (!sessionStorage.getItem('first_load_done')) {
+                        sessionStorage.setItem('first_load_done', 'true');
+                        window.location.reload();
+                    }
+                "#);
+
                 if let Ok(url) = webview.url() {
                     #[allow(non_snake_case)]
                     #[derive(serde::Serialize, Clone)]

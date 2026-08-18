@@ -108,7 +108,7 @@ const fastify = Fastify({
 						for (const oldSocket of existingSockets) {
 							try {
 								oldSocket.destroy();
-							} catch (_) {}
+							} catch (_) { }
 						}
 						activeWispSockets.delete(userId);
 					}
@@ -133,7 +133,7 @@ const fastify = Fastify({
 						wisp.routeRequest(req, socket, head);
 					} catch (e) {
 						console.error("[WISP ROUTE ERROR]", e);
-						try { socket.destroy(); } catch (_) {}
+						try { socket.destroy(); } catch (_) { }
 					}
 					return;
 				}
@@ -408,13 +408,13 @@ fastify.post("/api/auth/logout", async (req, reply) => {
 	const userId = req.user.id;
 
 	// Удаляем сессию из Redis
-	await redis.del(`session:${userId}`).catch(() => {});
+	await redis.del(`session:${userId}`).catch(() => { });
 
 	// Принудительно рвем все Wisp сокеты пользователя
 	const sockets = activeWispSockets.get(userId);
 	if (sockets) {
 		for (const s of sockets) {
-			try { s.destroy(); } catch (_) {}
+			try { s.destroy(); } catch (_) { }
 		}
 		activeWispSockets.delete(userId);
 	}
@@ -423,61 +423,7 @@ fastify.post("/api/auth/logout", async (req, reply) => {
 	return { status: "ok" };
 });
 
-// ----------------------------------------------------
-// 7. СИНХРОНИЗАЦИЯ КУК И ВКЛАДОК (ZERO-KNOWLEDGE)
-// ----------------------------------------------------
-fastify.get("/api/sync", async (req, reply) => {
-	await checkAuth(req, reply);
-	if (reply.sent) return;
 
-	try {
-		const result = await db.query(
-			"SELECT encrypted_cookies, open_tabs, updated_at FROM sessions_sync WHERE user_id = $1",
-			[req.user.id]
-		);
-		const data = result.rows[0] || { encrypted_cookies: null, open_tabs: [] };
-		console.log(`[SYNC RESTORE] Пользователь ${req.user.id} запросил сессию: ${JSON.stringify(data.open_tabs)}`);
-		return { status: "ok", data };
-	} catch (err) {
-		console.error("[SYNC RESTORE ERROR]", err);
-		return reply.code(500).send({ status: "error" });
-	}
-});
-
-fastify.post("/api/sync", async (req, reply) => {
-	const isBeacon = req.query.beacon === "1";
-
-	if (isBeacon) {
-		const bodyToken = req.body?.token;
-		if (!bodyToken) {
-			return reply.code(401).send({ status: "error", message: "Токен отсутствует" });
-		}
-		try {
-			req.user = jwt.verify(bodyToken, process.env.JWT_SECRET);
-		} catch (e) {
-			return reply.code(403).send({ status: "error", message: "Невалидный токен" });
-		}
-	} else {
-		await checkAuth(req, reply);
-		if (reply.sent) return;
-	}
-
-	const { encrypted_cookies, open_tabs } = req.body || {};
-	try {
-		await db.query(
-			`INSERT INTO sessions_sync (user_id, encrypted_cookies, open_tabs, updated_at) 
-			 VALUES ($1, $2, $3, NOW()) 
-			 ON CONFLICT (user_id) 
-			 DO UPDATE SET encrypted_cookies = $2, open_tabs = $3, updated_at = NOW()`,
-			[req.user.id, encrypted_cookies, JSON.stringify(open_tabs || [])]
-		);
-		console.log(`[SYNC BACKUP] Успешно сохранена сессия для user ${req.user.id}: ${(open_tabs || []).length} вкладок`);
-		return { status: "ok" };
-	} catch (err) {
-		console.error("[SYNC BACKUP ERROR]", err);
-		return reply.code(500).send({ status: "error" });
-	}
-});
 
 // ----------------------------------------------------
 // СТАТИЧЕСКИЕ МАРШРУТЫ ДЛЯ СОВМЕСТИМОСТИ

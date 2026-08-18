@@ -49,8 +49,6 @@ pub fn run() {
             start_tunnel,
             stop_tunnel,
             get_tunnel_status,
-            encrypt_session_data,
-            decrypt_session_data,
             native_navigate_tab,
             native_switch_tab,
             native_close_tab,

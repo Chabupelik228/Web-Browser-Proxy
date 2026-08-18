@@ -1,6 +1,5 @@
 // frontend/src-tauri/src/commands.rs
 use crate::browser::TabManager;
-use crate::security::crypto::{decrypt_string, encrypt_string, EncryptedPayload};
 use crate::security::device::get_hardware_fingerprint;
 use crate::tunnel::{ProxyConnectionInfo, TunnelManager};
 use tauri::{Manager, State, WebviewWindow};
@@ -34,21 +33,6 @@ pub fn get_tunnel_status(manager: State<'_, TunnelManager>) -> Option<ProxyConne
     manager.get_info()
 }
 
-/// Zero-Knowledge шифрование данных (куки + вкладки) перед отправкой на VPS
-#[tauri::command]
-pub fn encrypt_session_data(data_json: String, password: String) -> Result<EncryptedPayload, String> {
-    encrypt_string(&data_json, &password)
-}
-
-/// Zero-Knowledge расшифровка данных сессии после скачивания с VPS
-#[tauri::command]
-pub fn decrypt_session_data(
-    payload_b64: String,
-    iv_b64: String,
-    password: String,
-) -> Result<String, String> {
-    decrypt_string(&payload_b64, &iv_b64, &password)
-}
 
 // ----------------------------------------------------
 // НАЦИОНАЛЬНЫЕ КОМАНДЫ ДЛЯ CHROMIUM-ВКЛАДОК (MULTI-WEBVIEW)

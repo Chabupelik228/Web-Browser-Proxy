@@ -7,34 +7,11 @@ export const useBrowserStore = defineStore('browser', () => {
   const generateTabId = () => `${Date.now()}_${tabIdCounter++}`;
 
   const loadSavedTabs = () => {
-    try {
-      const saved = localStorage.getItem('chabupelik_tabs');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map(t => ({
-            id: generateTabId(),
-            url: t.url || '',
-            title: t.title || 'Новая вкладка',
-            isLoading: false,
-          }));
-        }
-      }
-    } catch (_) {}
     return [{ id: generateTabId(), url: '', title: 'Новая вкладка', isLoading: false }];
   };
 
   const tabs = ref(loadSavedTabs());
   const activeTabId = ref(tabs.value[0].id);
-
-  watch(tabs, (newTabs) => {
-    try {
-      localStorage.setItem(
-        'chabupelik_tabs',
-        JSON.stringify(newTabs.map(t => ({ url: t.url, title: t.title })))
-      );
-    } catch (_) {}
-  }, { deep: true });
 
   const addTab = (url = '') => {
     const newTab = { id: generateTabId(), url, title: 'Новая вкладка', isLoading: false };
@@ -61,8 +38,7 @@ export const useBrowserStore = defineStore('browser', () => {
 
   // Сбрасывает вкладки в памяти при выходе из аккаунта.
   const clearUserSession = async () => {
-    localStorage.removeItem('chabupelik_tabs');
-    tabs.value = [{ id: generateTabId(), url: '', title: 'Новая вкладка' }];
+    tabs.value = [{ id: generateTabId(), url: '', title: 'Новая вкладка', isLoading: false }];
     activeTabId.value = tabs.value[0].id;
   };
 

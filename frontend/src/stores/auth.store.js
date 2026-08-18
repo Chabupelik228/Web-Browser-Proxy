@@ -15,7 +15,6 @@ if (!API_BASE || !WISP_URL) {
 export const useAuthStore = defineStore('auth', () => {
     const user = ref(null);
     const accessToken = ref('');
-    const masterPassword = ref('');
     const deviceId = ref('');
     const proxyInfo = ref(null);
     const isProxyReady = ref(false);
@@ -44,15 +43,11 @@ export const useAuthStore = defineStore('auth', () => {
 
             const token = data.accessToken;
             user.value = data.user;
-            masterPassword.value = password;
             accessToken.value = token;
             axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
 
             // Запускаем нативный Wisp-туннель в Rust
             await startProxyTunnel(token);
-
-            // Восстанавливаем сохраненную сессию из облака (VPS)
-            await restoreSession();
 
             return true;
         } catch (error) {
@@ -74,18 +69,15 @@ export const useAuthStore = defineStore('auth', () => {
 
             const token = data.accessToken;
             user.value = data.user;
-            masterPassword.value = fallbackPassword || code;
             accessToken.value = token;
             axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
 
             localStorage.setItem('chabupelik_session', JSON.stringify({
                 accessToken: token,
                 user: data.user,
-                masterPassword: masterPassword.value,
             }));
 
             await startProxyTunnel(token);
-            await restoreSession();
 
             return true;
         } catch (error) {
@@ -112,59 +104,11 @@ export const useAuthStore = defineStore('auth', () => {
         }
     };
 
-    // Восстановление зашифрованных вкладок из облака
-    const restoreSession = async () => {
-        try {
-            const { data } = await axios.get(`${API_BASE}/api/sync`);
-            const payload = data?.data;
-            if (!payload) return;
 
-            if (Array.isArray(payload.open_tabs) && payload.open_tabs.length > 0) {
-                const browserStore = useBrowserStore();
-                browserStore.restoreTabs(payload.open_tabs);
-            }
-        } catch (e) {
-            console.error('Не удалось восстановить сессию:', e);
-        }
-    };
-
-    // Сохранение сессии в облако (Zero-Knowledge)
-    const backupSession = async () => {
-        if (!accessToken.value) return;
-
-        try {
-            const browserStore = useBrowserStore();
-            const realOpenTabs = browserStore.tabs.map((tab) => ({
-                url: tab.url,
-                title: tab.title,
-            }));
-
-            let encryptedStr = null;
-            if (masterPassword.value) {
-                try {
-                    const encryptedObj = await invoke('encrypt_session_data', {
-                        dataJson: JSON.stringify({ tabs: realOpenTabs }),
-                        password: masterPassword.value,
-                    });
-                    encryptedStr = JSON.stringify(encryptedObj);
-                } catch (encErr) {
-                    console.warn('Шифрование сессии пропущено:', encErr);
-                }
-            }
-
-            await axios.post(`${API_BASE}/api/sync`, {
-                encrypted_cookies: encryptedStr,
-                open_tabs: realOpenTabs,
-            });
-        } catch (e) {
-            console.error('Ошибка сохранения сессии:', e);
-        }
-    };
 
     // Выход из сессии с зачисткой следов
     const logout = async () => {
         try {
-            await backupSession();
             await axios.post(`${API_BASE}/api/auth/logout`);
         } catch (e) {
             console.error('Ошибка при выходе на сервере:', e);
@@ -192,14 +136,11 @@ export const useAuthStore = defineStore('auth', () => {
     return {
         user,
         accessToken,
-        masterPassword,
         deviceId,
         proxyInfo,
         isProxyReady,
         login,
         loginWithOtp,
         logout,
-        backupSession,
-        restoreSession,
     };
 });
