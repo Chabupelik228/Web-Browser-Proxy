@@ -699,8 +699,3 @@ const handleLogout = async () => {
   await authStore.logout();
 };
 </script>
-
-const handleLogout = async () => {
-  await authStore.logout();
-};
-</script>

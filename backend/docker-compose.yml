@@ -7,7 +7,7 @@ services:
     restart: always
     environment:
       POSTGRES_USER: scramjet_user
-      POSTGRES_PASSWORD: yeQMehBy+HQxDnSpT6gSlac4JFLrYltKQxQgCLNa6w4=
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: scramjet_db
     volumes:
       - pgdata:/var/lib/postgresql/data

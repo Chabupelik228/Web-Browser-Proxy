@@ -25,3 +25,12 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     iv VARCHAR(255) NOT NULL,                                 -- Вектор инициализации AES
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+-- Таблица белых списков для IP и Telegram ID
+CREATE TABLE IF NOT EXISTS whitelists (
+    id SERIAL PRIMARY KEY,
+    type VARCHAR(10) NOT NULL,
+    value VARCHAR(64) NOT NULL,
+    name VARCHAR(255),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(type, value)
+);

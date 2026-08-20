@@ -10,8 +10,8 @@ import fastifyStatic from "@fastify/static";
 import pg from "pg";
 import { createClient } from "redis";
 import jwt from "jsonwebtoken";
-
 import crypto from "node:crypto";
+import ipRangeCheck from "ip-range-check";
 
 const publicPath = fileURLToPath(new URL("../public/", import.meta.url));
 
@@ -27,6 +27,54 @@ redis.on("error", (err) => console.error("[REDIS ERROR]", err));
 await redis.connect().catch((err) => {
 	console.error("[REDIS CONNECT ERROR]", err);
 });
+
+// Инициализация списков из БД
+let allowedIps = [];
+let allowedTgIds = new Map();
+
+const client = await db.connect();
+try {
+	await client.query(`
+		CREATE TABLE IF NOT EXISTS whitelists (
+			id SERIAL PRIMARY KEY,
+			type VARCHAR(10) NOT NULL,
+			value VARCHAR(64) NOT NULL,
+			name VARCHAR(255),
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(type, value)
+		)
+	`);
+	// Автомиграция для старых баз
+	await client.query(`ALTER TABLE whitelists ADD COLUMN IF NOT EXISTS name VARCHAR(255)`);
+	await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_id VARCHAR(64)`);
+} finally {
+	client.release();
+}
+
+async function loadWhitelists() {
+	try {
+		const result = await db.query("SELECT type, value, name FROM whitelists");
+		const ips = [];
+		const tgs = new Map();
+		for (const row of result.rows) {
+			if (row.type === 'ip') ips.push(row.value);
+			if (row.type === 'tg_id') tgs.set(row.value, row.name || null);
+		}
+		allowedIps = ips;
+		allowedTgIds = tgs;
+		console.log(`[FIREWALL] Loaded ${ips.length} IPs and ${tgs.size} TG IDs.`);
+	} catch (e) {
+		console.error("[FIREWALL] Error loading whitelists:", e);
+	}
+}
+await loadWhitelists();
+
+// Проверка IP адреса на соответствие белому списку
+function isIpAllowed(clientIp) {
+	if (allowedIps.includes('all')) return true;
+	if (allowedIps.length === 0) return false;
+	return ipRangeCheck(clientIp, allowedIps);
+}
 
 // Настройки Wisp-проксирования
 logging.set_level(logging.NONE);
@@ -55,11 +103,35 @@ const fastify = Fastify({
 					res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
 				}
 
+				// Проверка IP адреса перед обработкой запроса
+				let clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+				if (clientIp && typeof clientIp === 'string') clientIp = clientIp.split(',')[0].trim();
+
+				const botToken = req.headers["x-bot-token"];
+				const isBot = botToken && process.env.BOT_TOKEN && botToken.length === process.env.BOT_TOKEN.length && crypto.timingSafeEqual(Buffer.from(botToken), Buffer.from(process.env.BOT_TOKEN));
+
+				if (!isBot && !isIpAllowed(clientIp)) {
+					console.warn(`[FIREWALL HTTP] Blocked request from IP: ${clientIp}`);
+					res.statusCode = 403;
+					res.end(JSON.stringify({ error: "Access denied by IP whitelist" }));
+					return;
+				}
+
 				handler(req, res);
 			})
 			.on("upgrade", async (req, socket, head) => {
 				if (socket.__wispHandled) {
 					console.warn("[WISP GATEWAY] Повторный upgrade на сокет — игнорируем");
+					return;
+				}
+
+				let clientIp = req.headers['x-forwarded-for'] || socket.remoteAddress;
+				if (clientIp && typeof clientIp === 'string') clientIp = clientIp.split(',')[0].trim();
+
+				if (!isIpAllowed(clientIp)) {
+					console.warn(`[FIREWALL WISP] Blocked upgrade from IP: ${clientIp}`);
+					socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+					socket.destroy();
 					return;
 				}
 
@@ -169,7 +241,7 @@ const fastify = Fastify({
 					});
 
 					try {
-						console.log(`[WISP GATEWAY] Wisp-туннель активен для user_id: ${userId} (${deviceId})`);
+						console.log(`[WISP GATEWAY] Wisp-туннель активен для user_id: ${userId} (${deviceHash})`);
 						req.url = "/";
 						wisp.routeRequest(req, socket, head);
 					} catch (e) {
@@ -221,19 +293,37 @@ fastify.post("/api/auth/register", async (req, reply) => {
 	if (botToken !== process.env.BOT_TOKEN) {
 		return reply.code(403).send({ error: "Доступ запрещен" });
 	}
-	const { username } = req.body || {};
+	let { username, user_id } = req.body || {};
+	
+	if (user_id && allowedTgIds.has(String(user_id))) {
+		const assignedName = allowedTgIds.get(String(user_id));
+		if (assignedName) {
+			username = assignedName;
+		}
+	}
+
 	if (!username) {
 		return reply.code(400).send({ error: "Логин обязателен" });
 	}
 
 	try {
+		if (!user_id) {
+			return reply.code(400).send({ error: "user_id (telegram_id) обязателен" });
+		}
+
+		const existingByTg = await db.query("SELECT id, username FROM users WHERE telegram_id = $1", [user_id]);
+		if (existingByTg.rows.length > 0) {
+			return reply.code(409).send({ error: "Пользователь уже существует" });
+		}
+
 		const result = await db.query(
-			"INSERT INTO users (username) VALUES ($1) RETURNING id, username",
-			[username]
+			"INSERT INTO users (username, telegram_id) VALUES ($1, $2) RETURNING id, username",
+			[username, user_id]
 		);
 		return { status: "ok", user: result.rows[0] };
 	} catch (err) {
-		return reply.code(500).send({ error: "Пользователь уже существует" });
+		console.error("[AUTH] Error registering user", err);
+		return reply.code(500).send({ error: "Ошибка БД при регистрации (возможно имя уже занято)" });
 	}
 });
 
@@ -246,14 +336,15 @@ fastify.post("/api/auth/otp/generate", async (req, reply) => {
 		return reply.code(403).send({ error: "Доступ запрещен" });
 	}
 
-	const { username } = req.body || {};
-	if (!username) {
-		return reply.code(400).send({ error: "Username обязателен" });
+	const { user_id } = req.body || {};
+	if (!user_id) {
+		return reply.code(400).send({ error: "user_id обязателен" });
 	}
 
 	try {
-		const result = await db.query("SELECT id, username, is_active FROM users WHERE username = $1", [username]);
-		const user = result.rows[0];
+		const resTg = await db.query("SELECT id, username, is_active FROM users WHERE telegram_id = $1", [user_id]);
+		const user = resTg.rows[0];
+
 		if (!user || !user.is_active) {
 			return reply.code(404).send({ error: "Пользователь не найден или заблокирован" });
 		}
@@ -267,7 +358,7 @@ fastify.post("/api/auth/otp/generate", async (req, reply) => {
 			username: user.username,
 		}), { EX: 120 });
 
-		console.log(`[AUTH OTP] Сгенерирован OTP для @${username} (действителен 120с)`);
+		console.log(`[AUTH OTP] Сгенерирован OTP для @${user.username} (действителен 120с)`);
 		return { status: "ok", code: otpCode, expiresIn: 120 };
 	} catch (err) {
 		console.error("[OTP GENERATE ERROR]", err);
@@ -441,6 +532,113 @@ fastify.post("/api/auth/logout", async (req, reply) => {
 });
 
 
+
+// ----------------------------------------------------
+// 7. УПРАВЛЕНИЕ БЕЛЫМИ СПИСКАМИ (ADMIN API)
+// ----------------------------------------------------
+const verifyBotToken = (req, reply, done) => {
+	const botToken = req.headers["x-bot-token"];
+	if (!botToken || botToken.length !== process.env.BOT_TOKEN.length) {
+		return reply.code(403).send({ error: "Доступ запрещен" });
+	}
+	if (!crypto.timingSafeEqual(Buffer.from(botToken), Buffer.from(process.env.BOT_TOKEN))) {
+		return reply.code(403).send({ error: "Доступ запрещен" });
+	}
+	done();
+};
+
+fastify.get("/api/admin/whitelists", { preHandler: verifyBotToken }, async (req, reply) => {
+	const tgArray = Array.from(allowedTgIds.entries()).map(([id, name]) => ({ id, name }));
+	return { status: "ok", ips: allowedIps, tg_ids: tgArray };
+});
+
+fastify.post("/api/admin/whitelists", { preHandler: verifyBotToken }, async (req, reply) => {
+	const { type, value, name } = req.body || {};
+	if (!['ip', 'tg_id'].includes(type) || !value) {
+		return reply.code(400).send({ error: "Неверные данные" });
+	}
+	try {
+		await db.query(
+			"INSERT INTO whitelists (type, value, name) VALUES ($1, $2, $3) ON CONFLICT (type, value) DO UPDATE SET name = EXCLUDED.name",
+			[type, value, name || null]
+		);
+		if (type === 'ip' && !allowedIps.includes(value)) allowedIps.push(value);
+		if (type === 'tg_id') allowedTgIds.set(value, name || null);
+		return { status: "ok" };
+	} catch (err) {
+		console.error("[ADMIN API] Error adding to whitelist:", err);
+		return reply.code(500).send({ error: "Ошибка БД" });
+	}
+});
+
+fastify.delete("/api/admin/whitelists", { preHandler: verifyBotToken }, async (req, reply) => {
+	const { type, value } = req.body || {};
+	if (!['ip', 'tg_id'].includes(type) || !value) {
+		return reply.code(400).send({ error: "Неверные данные" });
+	}
+	try {
+		await db.query(
+			"DELETE FROM whitelists WHERE type = $1 AND value = $2",
+			[type, value]
+		);
+		if (type === 'ip') allowedIps = allowedIps.filter(v => v !== value);
+		if (type === 'tg_id') allowedTgIds.delete(value);
+		return { status: "ok" };
+	} catch (err) {
+		console.error("[ADMIN API] Error deleting from whitelist:", err);
+		return reply.code(500).send({ error: "Ошибка БД" });
+	}
+});
+
+fastify.get("/api/admin/users", { preHandler: verifyBotToken }, async (req, reply) => {
+	try {
+		const result = await db.query("SELECT id, username, is_active, created_at, telegram_id FROM users ORDER BY id ASC");
+		return { status: "ok", users: result.rows };
+	} catch (e) {
+		console.error("[ADMIN] Error fetching users", e);
+		return reply.code(500).send({ error: "DB error" });
+	}
+});
+
+fastify.put("/api/admin/users/:id", { preHandler: verifyBotToken }, async (req, reply) => {
+	const { id } = req.params;
+	const { username } = req.body || {};
+	if (!username) return reply.code(400).send({ error: "Имя не может быть пустым" });
+	try {
+		await db.query("UPDATE users SET username = $1 WHERE id = $2", [username, id]);
+		return { status: "ok" };
+	} catch (e) {
+		console.error("[ADMIN] Error updating user", e);
+		return reply.code(500).send({ error: "DB error" });
+	}
+});
+
+fastify.delete("/api/admin/users/:id", { preHandler: verifyBotToken }, async (req, reply) => {
+	const { id } = req.params;
+	console.log(`[DEBUG DELETE] Attempting to delete user ${id}`);
+	try {
+		const delRes = await db.query("DELETE FROM users WHERE id = $1", [id]);
+		console.log(`[DEBUG DELETE] DB delete result: ${delRes.rowCount}`);
+		
+		// Invalidate active wisp session
+		for (const [key, sockets] of activeWispSockets.entries()) {
+			if (String(key) === String(id)) {
+				console.log(`[DEBUG DELETE] Found wisp sockets for ${id}`);
+				for (const socket of sockets) {
+					try { socket.destroy(); } catch (e) { console.error(`[DEBUG DELETE] Socket destroy error:`, e); }
+				}
+				activeWispSockets.delete(key);
+				console.log(`[ADMIN] Wisp sockets for deleted user ${id} closed.`);
+			}
+		}
+		
+		console.log(`[DEBUG DELETE] Success`);
+		return { status: "ok" };
+	} catch (e) {
+		console.error("[ADMIN] Error deleting user", e);
+		return reply.code(500).send({ error: "DB error" });
+	}
+});
 
 // ----------------------------------------------------
 // СТАТИЧЕСКИЕ МАРШРУТЫ ДЛЯ СОВМЕСТИМОСТИ
