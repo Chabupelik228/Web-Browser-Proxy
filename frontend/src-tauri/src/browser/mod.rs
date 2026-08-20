@@ -81,6 +81,29 @@ impl TabManager {
         let base_script = r#"
                 if (window !== window.top) return;
 
+                // Спуфинг объекта Client Hints
+                if (navigator.userAgentData) {
+                  Object.defineProperty(navigator, 'userAgentData', {
+                    get: () => ({
+                      brands: [
+                        { brand: 'Google Chrome', version: '131' },
+                        { brand: 'Chromium', version: '131' },
+                        { brand: 'Not_A Brand', version: '24' }
+                      ],
+                      mobile: false,
+                      platform: 'Windows',
+                      getHighEntropyValues: async () => ({
+                        architecture: 'x86',
+                        bitness: '64',
+                        model: '',
+                        platform: 'Windows',
+                        platformVersion: '10.0.0',
+                        uaFullVersion: '131.0.0.0'
+                      })
+                    })
+                  });
+                }
+
                 window.addEventListener('contextmenu', (e) => {
                     e.preventDefault();
                     let href = '';

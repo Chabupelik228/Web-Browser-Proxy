@@ -264,11 +264,11 @@ fastify.post("/api/auth/otp/verify", async (req, reply) => {
 			updatedAt: Date.now(),
 		}), { EX: 7 * 24 * 60 * 60 });
 
-		// Короткоживущий AccessToken (10 минут) с привязкой к Device ID
+		// Короткоживущий AccessToken (15 минут) с привязкой к Device ID
 		const accessToken = jwt.sign(
 			{ id: userId, username, deviceId },
 			process.env.JWT_SECRET,
-			{ expiresIn: "30d" }
+			{ expiresIn: "15m" }
 		);
 
 		const refreshToken = jwt.sign(
@@ -316,7 +316,7 @@ fastify.post("/api/auth/login", async (req, reply) => {
 		const accessToken = jwt.sign(
 			{ id: user.id, username: user.username, deviceId },
 			process.env.JWT_SECRET,
-			{ expiresIn: "30d" }
+			{ expiresIn: "15m" }
 		);
 
 		const refreshToken = jwt.sign(
@@ -378,7 +378,7 @@ fastify.post("/api/auth/refresh", async (req, reply) => {
 		const newAccessToken = jwt.sign(
 			{ id: user.id, username: user.username, deviceId },
 			process.env.JWT_SECRET,
-			{ expiresIn: "30d" }
+			{ expiresIn: "15m" }
 		);
 
 		const newRefreshToken = jwt.sign(
