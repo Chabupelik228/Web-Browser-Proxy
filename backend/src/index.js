@@ -124,16 +124,16 @@ const fastify = Fastify({
 					}
 
 					const userId = decoded.id;
-					const deviceId = decoded.deviceId || "unknown";
+					const deviceHash = decoded.deviceHash || "unknown";
 
 					// 1. Проверка активности сессии в Redis (Single-Session Enforcement)
 					try {
 						const activeSession = await redis.get(`session:${userId}`);
 						if (activeSession) {
 							const sessionData = JSON.parse(activeSession);
-							// Если пришел запрос с другим deviceId или токен старше сброса
-							if (sessionData.deviceId && sessionData.deviceId !== deviceId) {
-								console.warn(`[WISP AUTH] Отклонен сокет для user ${userId}: несовпадение deviceId`);
+							// Если пришел запрос с другим хэшем
+							if (sessionData.deviceHash && sessionData.deviceHash !== deviceHash) {
+								console.warn(`[WISP AUTH] Отклонен сокет для user ${userId}: несовпадение deviceHash`);
 								socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
 								socket.destroy();
 								return;
@@ -299,21 +299,26 @@ fastify.post("/api/auth/otp/verify", async (req, reply) => {
 		const username = data.username;
 		const deviceId = device_id || "desktop-unknown";
 
+		const deviceHash = crypto
+			.createHmac('sha256', process.env.JWT_SECRET)
+			.update(deviceId)
+			.digest('hex');
+
 		// Фиксация активной сессии в Redis (Single-Session Lock)
 		await redis.set(`session:${userId}`, JSON.stringify({
-			deviceId,
+			deviceHash,
 			updatedAt: Date.now(),
 		}), { EX: 7 * 24 * 60 * 60 });
 
-		// Короткоживущий AccessToken (15 минут) с привязкой к Device ID
+		// Короткоживущий AccessToken (15 минут) с привязкой к хэшу Device ID
 		const accessToken = jwt.sign(
-			{ id: userId, username, deviceId },
+			{ id: userId, username, deviceHash },
 			process.env.JWT_SECRET,
 			{ expiresIn: "15m" }
 		);
 
 		const refreshToken = jwt.sign(
-			{ id: userId, deviceId },
+			{ id: userId, deviceHash },
 			process.env.JWT_SECRET,
 			{ expiresIn: "30d" }
 		);
@@ -348,20 +353,25 @@ fastify.post("/api/auth/login", async (req, reply) => {
 
 		const deviceId = device_id || "desktop-unknown";
 
+		const deviceHash = crypto
+			.createHmac('sha256', process.env.JWT_SECRET)
+			.update(deviceId)
+			.digest('hex');
+
 		// Фиксация активной сессии в Redis
 		await redis.set(`session:${user.id}`, JSON.stringify({
-			deviceId,
+			deviceHash,
 			updatedAt: Date.now(),
 		}), { EX: 30 * 24 * 60 * 60 });
 
 		const accessToken = jwt.sign(
-			{ id: user.id, username: user.username, deviceId },
+			{ id: user.id, username: user.username, deviceHash },
 			process.env.JWT_SECRET,
 			{ expiresIn: "15m" }
 		);
 
 		const refreshToken = jwt.sign(
-			{ id: user.id, deviceId },
+			{ id: user.id, deviceHash },
 			process.env.JWT_SECRET,
 			{ expiresIn: "30d" }
 		);
@@ -399,35 +409,47 @@ fastify.post("/api/auth/refresh", async (req, reply) => {
 			return reply.code(403).send({ status: "error", message: "Сессия недействительна" });
 		}
 
-		if (!device_id || device_id !== decoded.deviceId) {
-			console.warn(`[AUTH REFRESH] Попытка рефреша с несовпадающим device_id. Expected: ${decoded.deviceId}, Got: ${device_id}`);
+		if (!device_id || !decoded.deviceHash) {
+			console.warn(`[AUTH REFRESH] Попытка рефреша: отсутствует device_id или deviceHash`);
 			return reply.code(403).send({ status: "error", message: "Несовпадение аппаратного идентификатора" });
 		}
-		const deviceId = decoded.deviceId;
+
+		const expectedHash = crypto
+			.createHmac('sha256', process.env.JWT_SECRET)
+			.update(device_id)
+			.digest('hex');
+
+		const isValid = expectedHash.length === decoded.deviceHash.length && crypto.timingSafeEqual(Buffer.from(expectedHash, 'hex'), Buffer.from(decoded.deviceHash, 'hex'));
+
+		if (!isValid) {
+			console.warn(`[AUTH REFRESH] Попытка рефреша с несовпадающим device_id.`);
+			return reply.code(403).send({ status: "error", message: "Несовпадение аппаратного идентификатора" });
+		}
+		const deviceHash = decoded.deviceHash;
 
 		// Проверка Single-Session Lock
 		const sessionRaw = await redis.get(`session:${user.id}`);
 		if (sessionRaw) {
 			const sessionData = JSON.parse(sessionRaw);
-			if (sessionData.deviceId && sessionData.deviceId !== deviceId) {
+			if (sessionData.deviceHash && sessionData.deviceHash !== deviceHash) {
 				return reply.code(403).send({ status: "error", message: "Сессия открыта на другом устройстве" });
 			}
 		}
 
 		// Обновляем метку времени сессии
 		await redis.set(`session:${user.id}`, JSON.stringify({
-			deviceId,
+			deviceHash,
 			updatedAt: Date.now(),
 		}), { EX: 30 * 24 * 60 * 60 });
 
 		const newAccessToken = jwt.sign(
-			{ id: user.id, username: user.username, deviceId },
+			{ id: user.id, username: user.username, deviceHash },
 			process.env.JWT_SECRET,
 			{ expiresIn: "15m" }
 		);
 
 		const newRefreshToken = jwt.sign(
-			{ id: user.id, deviceId },
+			{ id: user.id, deviceHash },
 			process.env.JWT_SECRET,
 			{ expiresIn: "30d" }
 		);
