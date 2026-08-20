@@ -13,11 +13,11 @@ pub fn run() {
     // Полное удаление всех данных (cookies, localStorage, cache) ДО запуска WebView2,
     // чтобы избежать блокировки файлов и ERR_CACHE_READ_FAILURE
     if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-        let path = std::path::Path::new(&local_app_data).join("com.tauri.dev");
+        let path = std::path::Path::new(&local_app_data).join("com.google.chrome");
         let _ = std::fs::remove_dir_all(&path);
     }
     if let Ok(app_data) = std::env::var("APPDATA") {
-        let path = std::path::Path::new(&app_data).join("com.tauri.dev");
+        let path = std::path::Path::new(&app_data).join("com.google.chrome");
         let _ = std::fs::remove_dir_all(&path);
     }
 
@@ -77,6 +77,7 @@ pub fn run() {
             native_start_dragging,
             native_title_changed,
             native_favicon_changed,
+            native_set_window_title,
             native_context_menu,
             native_url_changed,
             native_set_zoom,

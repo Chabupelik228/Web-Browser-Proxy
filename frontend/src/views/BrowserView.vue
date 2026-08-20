@@ -31,8 +31,10 @@
             @error="(e) => onFaviconError(tab)"
           />
           
-          <svg v-else class="w-3.5 h-3.5 text-zinc-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+          <svg v-else class="w-3.5 h-3.5 text-zinc-500 flex-shrink-0 object-contain" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="2" y1="12" x2="22" y2="12"></line>
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
           </svg>
           
           <span class="truncate">{{ getTabTitle(tab) }}</span>
@@ -235,8 +237,12 @@ import { listen } from '@tauri-apps/api/event';
 import { useAuthStore } from '../stores/auth.store';
 import { useBrowserStore } from '../stores/browser.store';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { PhysicalPosition } from '@tauri-apps/api/dpi';
+
+const updateAppTitle = (title) => {
+  invoke('native_set_window_title', { title: `${title || 'Новая вкладка'} - Google Chrome` })
+    .catch((e) => alert(`Error setting title: ${e}`));
+};
 
 const headerWrapper = ref(null);
 let resizeObserver = null;
@@ -455,6 +461,9 @@ onMounted(() => {
     const tab = browserStore.tabs.find(t => t.id === tId);
     if (tab && title && title.trim()) {
       tab.title = title.trim();
+      if (browserStore.activeTabId === tId) {
+        updateAppTitle(tab.title);
+      }
     }
   });
 
@@ -489,6 +498,13 @@ onUnmounted(() => {
 watch(() => browserStore.tabs.length, () => {
   setTimeout(checkScrollArrows, 50);
 });
+
+watch(() => browserStore.activeTabId, (newId) => {
+  const activeTab = browserStore.tabs.find(t => t.id === newId);
+  if (activeTab) {
+    updateAppTitle(activeTab.title);
+  }
+}, { immediate: true });
 
 const scrollTabs = (offset) => {
   if (tabsContainer.value) {

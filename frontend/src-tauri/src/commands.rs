@@ -252,6 +252,13 @@ pub fn native_close_window(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
+pub fn native_set_window_title(app: tauri::AppHandle, title: String) {
+    if let Some(win) = app.get_window("main").or_else(|| app.windows().into_values().next().map(|w| w.clone())) {
+        let _ = win.set_title(&title);
+    }
+}
+
+#[tauri::command]
 pub fn native_start_dragging(app: tauri::AppHandle) {
     if let Some(win) = app.get_window("main").or_else(|| app.windows().into_values().next().map(|w| w.clone())) {
         let _ = win.start_dragging();

@@ -26,6 +26,7 @@ commands.allow = [
     "native_start_dragging",
     "native_title_changed",
     "native_favicon_changed",
+    "native_set_window_title",
     "native_context_menu",
     "native_url_changed",
     "native_set_zoom",

@@ -4,6 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Chabupelik Browser</title>
+    <script>
+      window.onerror = function(msg, url, lineNo, columnNo, error) {
+        alert('Global error: ' + msg + '\nLine: ' + lineNo + '\nCol: ' + columnNo + '\n' + (error && error.stack));
+        return false;
+      };
+      window.addEventListener('unhandledrejection', function(event) {
+        alert('Unhandled promise rejection: ' + event.reason);
+      });
+    </script>
   </head>
   <body class="bg-[#08080a] text-zinc-100 overflow-hidden select-none">
     <div id="app"></div>

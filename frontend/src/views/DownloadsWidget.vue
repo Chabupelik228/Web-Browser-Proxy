@@ -1,17 +1,17 @@
 <template>
-  <div class="w-full h-full bg-[#0c0c11]/95 backdrop-blur-2xl flex flex-col font-sans select-none overflow-hidden rounded-2xl border border-zinc-700/70 shadow-[0_20px_50px_rgba(0,0,0,0.6)] text-zinc-200">
+  <div class="w-full h-full bg-[#282a2d]/95 backdrop-blur-2xl flex flex-col font-sans select-none overflow-hidden rounded-lg border border-[#3b3e41] shadow-2xl text-zinc-300">
     <!-- Header -->
-    <div class="flex items-center justify-between px-3.5 py-3 border-b border-zinc-800/80 bg-[#121218]/90" data-tauri-drag-region>
+    <div class="flex items-center justify-between px-3.5 py-3 border-b border-[#3b3e41] bg-[#2c2e31]/90" @mousedown="startDragging">
       <div class="flex items-center space-x-2 pointer-events-none">
-        <div class="w-6 h-6 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+        <div class="w-6 h-6 rounded-lg bg-[#3b3e41] flex items-center justify-center text-zinc-400">
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
           </svg>
         </div>
-        <span class="font-semibold text-xs text-zinc-100">Загрузки сессии</span>
+        <span class="font-medium text-xs text-zinc-200">Загрузки</span>
         <span 
           v-if="downloads.length > 0"
-          class="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-400"
+          class="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-[#3b3e41] text-zinc-400"
         >
           {{ downloads.length }}
         </span>
@@ -31,7 +31,7 @@
         </button>
         <button 
           @click="closeWidget" 
-          class="w-6 h-6 flex items-center justify-center text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/80 rounded-lg transition-colors"
+          class="w-6 h-6 flex items-center justify-center text-zinc-400 hover:text-zinc-100 hover:bg-[#545454] rounded-lg transition-colors"
           title="Закрыть"
         >
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -42,17 +42,17 @@
     </div>
 
     <!-- Список файлов -->
-    <div class="flex-1 overflow-y-auto space-y-2 p-2.5 bg-[#0e0e14]/50 custom-scrollbar">
+    <div class="flex-1 overflow-y-auto space-y-1 p-2 bg-[#282a2d]/50 custom-scrollbar">
       <!-- Empty State -->
       <div v-if="downloads.length === 0" class="h-full min-h-[260px] flex flex-col items-center justify-center text-center p-6 space-y-3">
-        <div class="w-12 h-12 rounded-2xl bg-zinc-900 border border-zinc-800/80 flex items-center justify-center text-zinc-500 shadow-inner">
+        <div class="w-12 h-12 rounded-2xl bg-[#1f2020] border border-[#3b3e41] flex items-center justify-center text-zinc-500 shadow-inner">
           <svg class="w-6 h-6 stroke-[1.5]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
           </svg>
         </div>
         <div>
-          <p class="text-xs font-medium text-zinc-300">Нет активных загрузок</p>
-          <p class="text-[11px] text-zinc-500 mt-0.5 max-w-[200px]">Скачанные в текущей сессии файлы появятся в этом списке</p>
+          <p class="text-xs font-medium text-zinc-300">Нет загрузок</p>
+          <p class="text-[11px] text-zinc-500 mt-0.5 max-w-[200px]">Скачанные файлы появятся здесь</p>
         </div>
       </div>
 
@@ -60,12 +60,12 @@
       <div 
         v-for="item in downloads" 
         :key="item.id"
-        class="p-2.5 bg-[#14141d]/90 hover:bg-[#1a1a26] border border-zinc-800/80 hover:border-zinc-700/80 rounded-xl transition-all duration-150 flex items-center justify-between group shadow-sm"
+        class="p-2.5 bg-[#323437] hover:bg-[#3b3e41] border border-[#3b3e41] hover:border-[#4a4d51] rounded-lg transition-all duration-150 flex items-center justify-between group"
       >
         <div class="flex items-center space-x-2.5 min-w-0 pr-2">
           <!-- File Category Icon -->
           <div 
-            class="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border"
+            class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border"
             :class="getFileTheme(item.filename)"
           >
             <!-- Executable / App -->
@@ -102,7 +102,7 @@
             <div class="flex items-center space-x-1.5 text-[10px] text-zinc-500 mt-0.5">
               <span>{{ item.time }}</span>
               <span>•</span>
-              <span class="text-emerald-400 font-medium">{{ item.size || 'Завершено' }}</span>
+              <span class="text-[#8ab4f8] font-medium">{{ item.size || 'Завершено' }}</span>
             </div>
           </div>
         </div>
@@ -111,7 +111,7 @@
         <div class="flex items-center space-x-1 shrink-0">
           <button 
             @click="openDownloadedFile(item.path)" 
-            class="flex items-center space-x-1 px-2.5 py-1 bg-zinc-800 hover:bg-emerald-500 hover:text-zinc-950 text-zinc-300 rounded-lg text-[11px] font-medium transition-all duration-150 shadow-sm"
+            class="flex items-center space-x-1 px-2.5 py-1 bg-[#3b3e41] hover:bg-[#8ab4f8] hover:text-[#202124] text-zinc-300 rounded-lg text-[11px] font-medium transition-all duration-150"
             title="Открыть файл"
           >
             <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -121,7 +121,7 @@
           </button>
           <button 
             @click="showDownloadedFileInFolder(item.path)" 
-            class="p-1.5 bg-zinc-800/60 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-100 rounded-lg transition-colors"
+            class="p-1.5 bg-[#3b3e41]/60 hover:bg-[#4a4d51] text-zinc-400 hover:text-zinc-100 rounded-lg transition-colors"
             title="Показать в папке"
           >
             <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -138,6 +138,8 @@
 import { ref, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+
+const startDragging = () => invoke('native_start_dragging').catch(() => {});
 
 const downloads = ref([]);
 const appWindow = getCurrentWindow();
@@ -219,17 +221,17 @@ const getFileTheme = (filename) => {
   const type = getFileType(filename);
   switch (type) {
     case 'app':
-      return 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400';
+      return 'bg-[#394b3e] border-[#4a6e52] text-[#81c995]';
     case 'archive':
-      return 'bg-amber-500/15 border-amber-500/30 text-amber-400';
+      return 'bg-[#4b4430] border-[#6e6340] text-[#fdd663]';
     case 'media':
-      return 'bg-purple-500/15 border-purple-500/30 text-purple-400';
+      return 'bg-[#3d3552] border-[#5c4d7a] text-[#c58af9]';
     case 'image':
-      return 'bg-blue-500/15 border-blue-500/30 text-blue-400';
+      return 'bg-[#2e3e50] border-[#3e5a7a] text-[#8ab4f8]';
     case 'doc':
-      return 'bg-cyan-500/15 border-cyan-500/30 text-cyan-400';
+      return 'bg-[#2e4450] border-[#3e647a] text-[#78d9ec]';
     default:
-      return 'bg-zinc-800 border-zinc-700 text-zinc-400';
+      return 'bg-[#3b3e41] border-[#4a4d51] text-zinc-400';
   }
 };
 
@@ -258,10 +260,10 @@ const showDownloadedFileInFolder = async (path) => {
   background: transparent;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: #27272a;
+  background: #3b3e41;
   border-radius: 9999px;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: #3f3f46;
+  background: #4a4d51;
 }
 </style>

@@ -256,7 +256,7 @@ impl TabManager {
 
         let t_id_load = t_id.clone();
         let mut builder = WebviewBuilder::new(&label, parsed_url)
-            .incognito(tab_id.starts_with("fake_"))
+            .incognito(true)
             .initialization_script(&init_script)
             .on_page_load(move |webview, _payload| {
                 // Автоматическая перезагрузка при первом открытии вкладки в сессии (решает проблему белого экрана ChatGPT/YouTube)
@@ -326,7 +326,7 @@ impl TabManager {
         let _wv = window
             .add_child(
                 builder,
-                tauri::LogicalPosition::new(0.0, top_bar_height),
+                tauri::LogicalPosition::new(-10000.0, -10000.0),
                 tauri::LogicalSize::new(logical_size.width, content_height),
             )
             .map_err(|e| {
@@ -339,7 +339,9 @@ impl TabManager {
             tabs_map.insert(tab_id.to_string(), label.clone());
         }
 
-        self.switch_to_tab(window, tab_id)?;
+        // We DO NOT call switch_to_tab here anymore.
+        // The frontend will explicitly call native_switch_tab when it's ready to show (e.g., after loading).
+        // self.switch_to_tab(window, tab_id)?;
 
         Ok(())
     }
@@ -350,7 +352,8 @@ impl TabManager {
         let tabs_map = self.tabs.lock();
         for (_, label) in tabs_map.iter() {
             if let Some(wv) = app_handle.get_webview(label) {
-                let _ = wv.hide();
+                // Use offscreen positioning instead of hide() to prevent repainting flash
+                let _ = wv.set_position(tauri::LogicalPosition::new(-10000.0, -10000.0));
             }
         }
     }
@@ -372,26 +375,34 @@ impl TabManager {
 
         let tabs_map = self.tabs.lock();
         let mut found_active = false;
+        // Сначала показываем целевую вкладку, чтобы избежать мерцания
         for (id, label) in tabs_map.iter() {
-            if let Some(wv) = app_handle.get_webview(label) {
-                if id == tab_id {
+            if id == tab_id {
+                if let Some(wv) = app_handle.get_webview(label) {
                     println!("[TAB_MANAGER] Showing webview: {}", label);
                     let _ = wv.set_position(tauri::LogicalPosition::new(0.0, top_bar_height));
                     let _ = wv.set_size(tauri::LogicalSize::new(logical_size.width, content_height));
                     let _ = wv.show();
                     let _ = wv.set_focus();
                     found_active = true;
-                } else {
-                    let _ = wv.hide();
+                }
+            }
+        }
+        
+        // Затем убираем остальные вкладки за экран (offscreen) вместо hide()
+        for (id, label) in tabs_map.iter() {
+            if id != tab_id {
+                if let Some(wv) = app_handle.get_webview(label) {
+                    let _ = wv.set_position(tauri::LogicalPosition::new(-10000.0, -10000.0));
                 }
             }
         }
 
         if !found_active {
-            println!("[TAB_MANAGER] No webview found for tab_id: {}. Hiding all.", tab_id);
+            println!("[TAB_MANAGER] No webview found for tab_id: {}. Moving all offscreen.", tab_id);
             for (_, label) in tabs_map.iter() {
                 if let Some(wv) = app_handle.get_webview(label) {
-                    let _ = wv.hide();
+                    let _ = wv.set_position(tauri::LogicalPosition::new(-10000.0, -10000.0));
                 }
             }
             

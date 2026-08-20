@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "chabupelik-browser",
+  "productName": "Google Chrome",
   "version": "0.1.0",
-  "identifier": "com.tauri.dev",
+  "identifier": "com.google.chrome",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://127.0.0.1:1420",
@@ -13,12 +13,13 @@
     "windows": [
       {
         "label": "main",
-        "title": "Chabupelik Browser",
+        "title": "Google Chrome",
         "width": 800,
         "height": 600,
         "resizable": true,
         "fullscreen": false,
-        "decorations": false
+        "decorations": false,
+        "incognito": true
       },
       {
         "label": "downloads-widget",
@@ -32,7 +33,23 @@
         "skipTaskbar": true,
         "resizable": false,
         "shadow": false,
-        "visible": false
+        "visible": false,
+        "incognito": true
+      },
+      {
+        "label": "menu-widget",
+        "url": "/?widget=menu",
+        "title": "Меню",
+        "width": 320,
+        "height": 480,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false,
+        "visible": false,
+        "incognito": true
       }
     ],
     "security": {

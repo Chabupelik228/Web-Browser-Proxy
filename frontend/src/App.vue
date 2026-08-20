@@ -2,6 +2,7 @@
 <template>
   <div class="h-screen w-screen bg-[#08080a] text-white overflow-hidden font-sans select-none" :class="{'bg-transparent': isWidget}">
     <DownloadsWidget v-if="widgetName === 'downloads'" />
+    <MenuWidget v-else-if="widgetName === 'menu'" />
 
     <template v-else>
       <FakeChromeView v-if="!authStore.accessToken" />
@@ -25,6 +26,7 @@ import { useAuthStore } from './stores/auth.store';
 import FakeChromeView from './views/FakeChromeView.vue';
 import BrowserView from './views/BrowserView.vue';
 import DownloadsWidget from './views/DownloadsWidget.vue';
+import MenuWidget from './views/MenuWidget.vue';
 
 const authStore = useAuthStore();
 
