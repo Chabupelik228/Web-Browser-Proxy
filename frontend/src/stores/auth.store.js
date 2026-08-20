@@ -18,6 +18,9 @@ export const useAuthStore = defineStore('auth', () => {
     const deviceId = ref('');
     const proxyInfo = ref(null);
     const isProxyReady = ref(false);
+    
+    // 'idle' | 'authenticating' | 'connecting' | 'morphing' | 'done'
+    const transitionPhase = ref('idle');
 
     // Инициализация Device ID из Rust ядра
     const initDeviceId = async () => {
@@ -29,36 +32,12 @@ export const useAuthStore = defineStore('auth', () => {
         }
     };
 
-    // 1. Вход по логину и паролю
-    const login = async (username, password) => {
+
+
+    // Быстрый вход по 6-значному коду из Telegram
+    const loginWithOtp = async (code) => {
         try {
-            await initDeviceId();
-            const { data } = await axios.post(`${API_BASE}/api/auth/login`, {
-                username,
-                password,
-                device_id: deviceId.value,
-            });
-
-            if (data.status !== 'ok') return false;
-
-            const token = data.accessToken;
-            user.value = data.user;
-            accessToken.value = token;
-            axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-
-            // Запускаем нативный Wisp-туннель в Rust
-            await startProxyTunnel(token);
-
-            return true;
-        } catch (error) {
-            console.error('Ошибка входа по паролю:', error);
-            return false;
-        }
-    };
-
-    // 2. Быстрый вход по 6-значному коду из Telegram
-    const loginWithOtp = async (code, fallbackPassword = '') => {
-        try {
+            transitionPhase.value = 'authenticating';
             await initDeviceId();
             const { data } = await axios.post(`${API_BASE}/api/auth/otp/verify`, {
                 code,
@@ -77,11 +56,18 @@ export const useAuthStore = defineStore('auth', () => {
                 user: data.user,
             }));
 
+            transitionPhase.value = 'connecting';
             await startProxyTunnel(token);
+
+            transitionPhase.value = 'morphing';
+            setTimeout(() => {
+                transitionPhase.value = 'done';
+            }, 700);
 
             return true;
         } catch (error) {
             console.error('Ошибка входа по OTP:', error);
+            transitionPhase.value = 'idle';
             return false;
         }
     };
@@ -121,6 +107,7 @@ export const useAuthStore = defineStore('auth', () => {
             accessToken.value = '';
             isProxyReady.value = false;
             proxyInfo.value = null;
+            transitionPhase.value = 'idle';
             delete axios.defaults.headers.common['Authorization'];
 
             const browserStore = useBrowserStore();
@@ -136,7 +123,7 @@ export const useAuthStore = defineStore('auth', () => {
         deviceId,
         proxyInfo,
         isProxyReady,
-        login,
+        transitionPhase,
         loginWithOtp,
         logout,
     };

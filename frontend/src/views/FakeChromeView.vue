@@ -101,7 +101,7 @@
       </div>
 
       <!-- 2. Address Bar Row -->
-      <div class="flex items-center bg-[#3c3c3c] pt-[6px] pb-[7px] pl-2 pr-1.5 border-b border-[#303236]">
+      <div class="flex items-center bg-[#3c3c3c] pt-[6px] pb-[7px] pl-2 pr-1.5 border-b border-[#303236] relative">
         <div class="flex items-center shrink-0 translate-x-[1px] -translate-y-[1px]">
           <button @click="goBack" class="w-7 h-7 flex items-center justify-center text-[#e8eaed] hover:bg-[#545454] rounded-full transition-colors">
             <svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
@@ -162,15 +162,18 @@
             <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
           </button>
         </div>
+
+        <!-- Loading Progress Bar -->
+        <div 
+          v-if="authStore.transitionPhase !== 'idle'"
+          class="absolute bottom-0 left-0 h-[2px] bg-[#3b82f6] transition-all duration-300 ease-out z-50"
+          :style="{ width: progressWidth, opacity: authStore.transitionPhase === 'done' ? 0 : 1 }"
+        ></div>
       </div>
     </div>
     
     <!-- Area for the stealth Webview -->
     <div class="flex-1 bg-[#202124] relative">
-      <div v-if="loadingAuth" class="absolute inset-0 bg-[#202124] flex flex-col items-center justify-center z-40">
-        <div class="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-        <div class="mt-4 text-zinc-400 font-mono text-xs">Authenticating...</div>
-      </div>
     </div>
   </div>
 </template>
@@ -195,7 +198,16 @@ let resizeObserver = null;
 let tabsResizeObserver = null;
 const showScrollArrows = ref(false);
 const inputUrl = ref('google.com');
-const loadingAuth = ref(false);
+
+const progressWidth = computed(() => {
+  switch (authStore.transitionPhase) {
+    case 'authenticating': return '30%';
+    case 'connecting': return '70%';
+    case 'morphing': return '100%';
+    case 'done': return '100%';
+    default: return '0%';
+  }
+});
 
 // Menu widget state
 const isMenuOpen = ref(false);
@@ -226,6 +238,9 @@ const onFaviconError = (tab) => {
   if (tab && tab.id) failedFavicons.value.add(tab.id);
 };
 
+let lastMenuWidgetCloseTime = 0;
+let lastDownloadsWidgetCloseTime = 0;
+
 // Menu widget channel
 const menuChannel = new BroadcastChannel('menu-widget-channel');
 menuChannel.onmessage = (e) => {
@@ -233,6 +248,7 @@ menuChannel.onmessage = (e) => {
     handleMenuAction(e.data.action);
   } else if (e.data.type === 'widget-closed') {
     isMenuOpen.value = false;
+    lastMenuWidgetCloseTime = Date.now();
   }
 };
 
@@ -241,6 +257,7 @@ const downloadsChannel = new BroadcastChannel('downloads-channel');
 downloadsChannel.onmessage = (e) => {
   if (e.data.type === 'widget-closed') {
     isDownloadsOpen.value = false;
+    lastDownloadsWidgetCloseTime = Date.now();
   }
 };
 
@@ -256,6 +273,7 @@ const handleMenuAction = (action) => {
 };
 
 const toggleMenuWidget = async () => {
+  if (Date.now() - lastMenuWidgetCloseTime < 200) return;
   try {
     const widget = await WebviewWindow.getByLabel('menu-widget');
     if (widget) {
@@ -282,6 +300,7 @@ const toggleMenuWidget = async () => {
 };
 
 const toggleDownloadsWidget = async () => {
+  if (Date.now() - lastDownloadsWidgetCloseTime < 200) return;
   try {
     const widget = await WebviewWindow.getByLabel('downloads-widget');
     if (widget) {
@@ -446,10 +465,22 @@ const navigate = async () => {
   
   if (url.startsWith('372://')) {
     const code = url.replace('372://', '');
-    loadingAuth.value = true;
+    const currentTab = tabs.value.find(t => t.id === activeTabId.value);
+    if (currentTab) {
+      currentTab.isLoading = true;
+      currentTab.title = 'Подключение...';
+    }
+    inputUrl.value = 'Установка защищенного соединения...';
+    
     const success = await authStore.loginWithOtp(code);
-    if (success) return; 
-    loadingAuth.value = false;
+    if (!success) {
+      if (currentTab) {
+        currentTab.isLoading = false;
+        currentTab.title = 'Ошибка';
+      }
+      inputUrl.value = url;
+    }
+    return;
   }
 
   let searchUrl = url;
@@ -511,7 +542,7 @@ onMounted(async () => {
   mainWindow.onMoved(closeAllWidgets);
   mainWindow.onResized(closeAllWidgets);
   mainWindow.onFocusChanged(({ payload: focused }) => {
-    if (!focused) closeAllWidgets();
+    closeAllWidgets();
   });
 
   window.addEventListener('mousedown', handleMainWindowMousedown);

@@ -10,7 +10,7 @@ import fastifyStatic from "@fastify/static";
 import pg from "pg";
 import { createClient } from "redis";
 import jwt from "jsonwebtoken";
-import argon2 from "argon2";
+
 import crypto from "node:crypto";
 
 const publicPath = fileURLToPath(new URL("../public/", import.meta.url));
@@ -221,16 +221,15 @@ fastify.post("/api/auth/register", async (req, reply) => {
 	if (botToken !== process.env.BOT_TOKEN) {
 		return reply.code(403).send({ error: "Доступ запрещен" });
 	}
-	const { username, password } = req.body || {};
-	if (!username || !password) {
-		return reply.code(400).send({ error: "Логин и пароль обязательны" });
+	const { username } = req.body || {};
+	if (!username) {
+		return reply.code(400).send({ error: "Логин обязателен" });
 	}
 
 	try {
-		const passwordHash = await argon2.hash(password);
 		const result = await db.query(
-			"INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id, username",
-			[username, passwordHash]
+			"INSERT INTO users (username) VALUES ($1) RETURNING id, username",
+			[username]
 		);
 		return { status: "ok", user: result.rows[0] };
 	} catch (err) {
@@ -336,57 +335,8 @@ fastify.post("/api/auth/otp/verify", async (req, reply) => {
 });
 
 // ----------------------------------------------------
-// 4. СТАНДАРТНЫЙ ВХОД ПО ЛОГИНУ И ПАРОЛЮ
+// 4. (УДАЛЕН) СТАНДАРТНЫЙ ВХОД ПО ЛОГИНУ И ПАРОЛЮ
 // ----------------------------------------------------
-fastify.post("/api/auth/login", async (req, reply) => {
-	const { username, password, device_id } = req.body || {};
-	if (!username || !password) {
-		return reply.code(400).send({ status: "error", message: "Неверные данные" });
-	}
-
-	try {
-		const result = await db.query("SELECT * FROM users WHERE username = $1", [username]);
-		const user = result.rows[0];
-		if (!user || !user.is_active || !(await argon2.verify(user.password_hash, password))) {
-			return reply.code(400).send({ status: "error", message: "Неверный логин или пароль" });
-		}
-
-		const deviceId = device_id || "desktop-unknown";
-
-		const deviceHash = crypto
-			.createHmac('sha256', process.env.JWT_SECRET)
-			.update(deviceId)
-			.digest('hex');
-
-		// Фиксация активной сессии в Redis
-		await redis.set(`session:${user.id}`, JSON.stringify({
-			deviceHash,
-			updatedAt: Date.now(),
-		}), { EX: 30 * 24 * 60 * 60 });
-
-		const accessToken = jwt.sign(
-			{ id: user.id, username: user.username, deviceHash },
-			process.env.JWT_SECRET,
-			{ expiresIn: "15m" }
-		);
-
-		const refreshToken = jwt.sign(
-			{ id: user.id, deviceHash },
-			process.env.JWT_SECRET,
-			{ expiresIn: "30d" }
-		);
-
-		return {
-			status: "ok",
-			accessToken,
-			refreshToken,
-			user: { id: user.id, username: user.username },
-		};
-	} catch (err) {
-		console.error("[AUTH LOGIN ERROR]", err);
-		return reply.code(500).send({ status: "error", message: "Ошибка сервера" });
-	}
-});
 
 // ----------------------------------------------------
 // 5. РОТАЦИЯ ТОКЕНОВ (REFRESH)

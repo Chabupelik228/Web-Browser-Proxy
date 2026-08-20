@@ -1,68 +1,27 @@
 # telegram_bot/bot.py
 import os
-import random
-import string
-import requests
+import asyncio
+import aiohttp
 from dotenv import load_dotenv
-import telebot
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+from aiogram.client.default import DefaultBotProperties
 
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_BASE = os.getenv("API_URL", "http://localhost:8080").replace("/api/auth/register", "").rstrip("/")
 API_SECRET = os.getenv("API_SECRET")
-DOMAIN = os.getenv("DOMAIN", "https://web.chabupelik.su")
+DOMAIN = os.getenv("DOMAIN")
 
-bot = telebot.TeleBot(BOT_TOKEN)
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
+dp = Dispatcher()
 
-def generate_password(length=12):
-    characters = string.ascii_letters + string.digits
-    return ''.join(random.choice(characters) for _ in range(length))
-
-def get_username(message):
+def get_username(message: types.Message):
     return message.from_user.username or f"tg_{message.from_user.id}"
 
-@bot.message_handler(commands=['start', 'help'])
-def send_welcome(message):
-    username = get_username(message)
-    password = generate_password()
-    
-    headers = {
-        "x-bot-token": API_SECRET,
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "username": username,
-        "password": password
-    }
-    
-    try:
-        response = requests.post(f"{API_BASE}/api/auth/register", json=payload, headers=headers, timeout=10)
-        if response.status_code == 200:
-            welcome_text = (
-                f"🎉 *Регистрация в Chabupelik Browser успешна!*\n\n"
-                f"Твои учетные данные:\n"
-                f"👤 *Логин:* `{username}`\n"
-                f"🔑 *Пароль:* `{password}`\n\n"
-                f"⚡ *Быстрый вход без пароля:* напиши команду /login чтобы получить одноразовый 6-значный код для входа в браузер.\n\n"
-                f"🌐 *Веб-версия:* {DOMAIN}"
-            )
-            bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown")
-        elif response.status_code == 500:
-            welcome_text = (
-                f"ℹ️ *Вы уже зарегистрированы в системе!*\n\n"
-                f"👤 *Логин:* `{username}`\n\n"
-                f"🔑 *Получить код для входа:* отправьте команду /login для получения одноразового кода авторизации в браузере."
-            )
-            bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown")
-        else:
-            bot.send_message(message.chat.id, "❌ Произошла ошибка при регистрации. Попробуйте позже.")
-    except Exception as e:
-        print("Error during register:", e)
-        bot.send_message(message.chat.id, "❌ Не удалось связаться с сервером авторизации.")
-
-@bot.message_handler(commands=['login', 'code', 'otp'])
-def send_otp(message):
+@dp.message(Command("start", "help"))
+async def send_welcome(message: types.Message):
     username = get_username(message)
     
     headers = {
@@ -74,9 +33,52 @@ def send_otp(message):
     }
     
     try:
-        response = requests.post(f"{API_BASE}/api/auth/otp/generate", json=payload, headers=headers, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"{API_BASE}/api/auth/register", json=payload, headers=headers, timeout=10) as response:
+                status = response.status
+        
+        if status == 200:
+            welcome_text = (
+                f"🎉 *Регистрация в Chabupelik Browser успешна!*\n\n"
+                f"Твои учетные данные:\n"
+                f"👤 *Логин:* `{username}`\n\n"
+                f"⚡ *Быстрый вход:* напиши команду /login чтобы получить одноразовый 6-значный код для входа в браузер.\n\n"
+                f"🌐 *Веб-версия:* {DOMAIN}"
+            )
+            await message.answer(welcome_text)
+        elif status == 500:
+            welcome_text = (
+                f"ℹ️ *Вы уже зарегистрированы в системе!*\n\n"
+                f"👤 *Логин:* `{username}`\n\n"
+                f"🔑 *Получить код для входа:* отправьте команду /login для получения одноразового кода авторизации в браузере."
+            )
+            await message.answer(welcome_text)
+        else:
+            await message.answer("❌ Произошла ошибка при регистрации. Попробуйте позже.")
+    except Exception as e:
+        print("Error during register:", e)
+        await message.answer("❌ Не удалось связаться с сервером авторизации.")
+
+@dp.message(Command("login", "code", "otp"))
+async def send_otp(message: types.Message):
+    username = get_username(message)
+    
+    headers = {
+        "x-bot-token": API_SECRET,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "username": username
+    }
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"{API_BASE}/api/auth/otp/generate", json=payload, headers=headers, timeout=10) as response:
+                status = response.status
+                if status == 200:
+                    data = await response.json()
+        
+        if status == 200:
             code = data.get("code")
             expires = data.get("expiresIn", 120)
             
@@ -86,18 +88,27 @@ def send_otp(message):
                 f"⏳ Код действителен *{expires} секунд*.\n"
                 f"Введи этот 6-значный код в окне браузера для входа."
             )
-            bot.send_message(message.chat.id, otp_text, parse_mode="Markdown")
-        elif response.status_code == 404:
-            bot.send_message(
-                message.chat.id, 
-                "❌ Ваш аккаунт не найден. Отправьте /start для автоматической регистрации."
-            )
+            sent_message = await message.answer(otp_text)
+            
+            async def delete_later(msg: types.Message, delay: int):
+                await asyncio.sleep(delay)
+                try:
+                    await msg.delete()
+                except Exception as e:
+                    print(f"Failed to delete message: {e}")
+            
+            asyncio.create_task(delete_later(sent_message, expires))
+        elif status == 404:
+            await message.answer("❌ Ваш аккаунт не найден. Отправьте /start для автоматической регистрации.")
         else:
-            bot.send_message(message.chat.id, "❌ Ошибка сервера при генерации кода. Попробуйте позже.")
+            await message.answer("❌ Ошибка сервера при генерации кода. Попробуйте позже.")
     except Exception as e:
         print("Error during OTP generate:", e)
-        bot.send_message(message.chat.id, "❌ Не удалось связаться с сервером авторизации.")
+        await message.answer("❌ Не удалось связаться с сервером авторизации.")
+
+async def main():
+    print("Telegram bot (aiogram) is running with OTP support...")
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    print("Telegram bot is running with OTP support...")
-    bot.infinity_polling()
+    asyncio.run(main())

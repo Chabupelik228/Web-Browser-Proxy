@@ -1,21 +1,21 @@
 <!-- frontend/src/App.vue -->
 <template>
-  <div class="h-screen w-screen bg-[#08080a] text-white overflow-hidden font-sans select-none" :class="{'bg-transparent': isWidget}">
+  <div class="h-screen w-screen bg-[#08080a] text-white overflow-hidden font-sans select-none morph-container" :class="{'bg-transparent': isWidget}">
     <DownloadsWidget v-if="widgetName === 'downloads'" />
     <MenuWidget v-else-if="widgetName === 'menu'" />
 
     <template v-else>
-      <FakeChromeView v-if="!authStore.accessToken" />
+      <FakeChromeView 
+        v-if="!authStore.accessToken || authStore.transitionPhase !== 'done'" 
+        class="morph-layer"
+        :class="{ 'morph-fade-out': authStore.transitionPhase === 'morphing' }"
+      />
 
-      <div
-        v-else-if="!authStore.isProxyReady"
-        class="h-full w-full flex flex-col items-center justify-center bg-[#08080a] text-zinc-400 text-xs gap-3"
-      >
-        <div class="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
-        <span class="font-mono text-zinc-300">Устанавливаем защищенный Wisp-туннель к VPS...</span>
-      </div>
-
-      <BrowserView v-else />
+      <BrowserView 
+        v-if="authStore.isProxyReady" 
+        class="morph-layer"
+        :class="{ 'morph-fade-in': authStore.transitionPhase === 'morphing' }"
+      />
     </template>
   </div>
 </template>

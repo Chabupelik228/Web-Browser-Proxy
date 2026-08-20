@@ -1,1 +1,0 @@
-import pg from 'pg'; const db = new pg.Pool({ connectionString: process.env.DATABASE_URL }); db.query('DROP TABLE IF EXISTS sessions_sync CASCADE').then(() => { console.log('Dropped'); process.exit(0); }).catch(e => console.error(e));

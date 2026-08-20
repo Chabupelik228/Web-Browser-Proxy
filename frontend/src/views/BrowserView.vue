@@ -163,6 +163,18 @@
           </span>
         </button>
 
+        <!-- Кнопка Выхода (Вернуться в обычный браузер) -->
+        <button 
+          @click="handleLogout" 
+          class="ml-2 pl-2.5 pr-3 py-1.5 flex items-center justify-center space-x-1.5 bg-gradient-to-r from-red-500/10 to-orange-500/10 hover:from-red-500/20 hover:to-orange-500/20 border border-red-500/20 hover:border-red-500/40 text-red-400 hover:text-red-300 rounded-lg transition-all shadow-sm group"
+          title="Вернуться в обычный браузер"
+        >
+          <svg class="w-3.5 h-3.5 group-hover:-translate-x-0.5 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+          </svg>
+          <span class="text-[11px] font-medium tracking-wide">ВЫЙТИ</span>
+        </button>
+
       </div>
     </div>
 
@@ -311,6 +323,7 @@ const flyingItem = ref(null);
 const showSaveModal = ref(false); // We don't use this anymore but keep ref
 const pendingDownload = ref(null);
 const targetSavePath = ref('');
+let lastWidgetCloseTime = 0;
 
 const syncDownloadsToWidget = () => {
   const channel = new BroadcastChannel('downloads-channel');
@@ -318,6 +331,9 @@ const syncDownloadsToWidget = () => {
 };
 
 const toggleDownloadsWidget = async () => {
+  if (Date.now() - lastWidgetCloseTime < 200) {
+    return; // Prevent immediate reopen if closed by blur
+  }
   try {
     const widget = await WebviewWindow.getByLabel('downloads-widget');
     if (widget) {
@@ -377,6 +393,7 @@ channel.onmessage = (e) => {
     sessionDownloads.value = [];
   } else if (e.data.type === 'widget-closed') {
     isDownloadsOpen.value = false;
+    lastWidgetCloseTime = Date.now();
   }
 };
 
@@ -414,7 +431,10 @@ onMounted(() => {
   mainWindow.onMoved(closeWidgetExternally);
   mainWindow.onResized(closeWidgetExternally);
   mainWindow.onFocusChanged(({ payload: focused }) => {
-    if (!focused) closeWidgetExternally();
+    // Если главное окно получает фокус (например клик по нативному webview страницы)
+    // или теряет фокус (альт-таб), закрываем виджет.
+    // Виджет имеет свое окно, поэтому когда он открыт - главное окно не в фокусе.
+    closeWidgetExternally();
   });
 
   const activeTab = browserStore.tabs.find(t => t.id === browserStore.activeTabId);
@@ -455,6 +475,8 @@ onMounted(() => {
       tab.url = url;
       if (browserStore.activeTabId === tabId) {
         inputUrl.value = formatDisplayUrl(url);
+        // Force show the webview once it's loaded to fix the issue where it stays hidden
+        invoke('native_switch_tab', { tabId }).catch(() => {});
       }
     }
   });
@@ -672,6 +694,11 @@ const extractHostname = (urlStr) => {
     return urlStr;
   }
 };
+
+const handleLogout = async () => {
+  await authStore.logout();
+};
+</script>
 
 const handleLogout = async () => {
   await authStore.logout();
