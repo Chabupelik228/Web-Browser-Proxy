@@ -42,7 +42,7 @@ api.interceptors.response.use(
         const authStore = useAuthStore(); // Вызываем тут, чтобы избежать ошибки инициализации Pinia
         
         // Дергаем эндпоинт рефреша (кука улетит автоматически)
-        const { data } = await axios.post('/api/auth/refresh', {}, { withCredentials: true });
+        const { data } = await axios.post('/api/auth/refresh', { device_id: authStore.deviceId }, { withCredentials: true });
         
         authStore.accessToken = data.accessToken;
         api.defaults.headers.common['Authorization'] = 'Bearer ' + data.accessToken;

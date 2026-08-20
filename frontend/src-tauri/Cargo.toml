@@ -12,6 +12,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+dotenvy = "0.15.7"
 
 [dependencies]
 tauri = { version = "2", features = ["unstable", "webview-data-url"] }
@@ -43,3 +44,4 @@ base64 = "0.22"
 # Сбор информации о системе для Device Fingerprint
 sysinfo = "0.33"
 dotenvy = "0.15.7"
+obfstr = "0.4"

@@ -73,6 +73,47 @@ const fastify = Fastify({
 						return;
 					}
 
+					// Защита от сторонних WISP-клиентов и Replay-атак
+					const clientTimestamp = req.headers["x-wisp-timestamp"];
+					const clientSignature = req.headers["x-wisp-signature"];
+
+					if (!clientTimestamp || !clientSignature) {
+						console.warn("[WISP AUTH] Отсутствует подпись или timestamp");
+						socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+						socket.destroy();
+						return;
+					}
+
+					const ts = Number(clientTimestamp);
+					if (!Number.isFinite(ts) || isNaN(ts) || Math.abs(Date.now() / 1000 - ts) > 30) {
+						console.warn("[WISP AUTH] Replay attack или истекший timestamp");
+						socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+						socket.destroy();
+						return;
+					}
+
+					const expectedSignature = crypto.createHash('sha256')
+						.update(token + clientTimestamp + process.env.WISP_SALT)
+						.digest('hex');
+
+					if (clientSignature.length !== expectedSignature.length) {
+						socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+						socket.destroy();
+						return;
+					}
+
+					const isValid = crypto.timingSafeEqual(
+						Buffer.from(clientSignature, 'hex'),
+						Buffer.from(expectedSignature, 'hex')
+					);
+
+					if (!isValid) {
+						console.warn("[WISP AUTH] Невалидная HMAC подпись");
+						socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+						socket.destroy();
+						return;
+					}
+
 					let decoded;
 					try {
 						decoded = jwt.verify(token, process.env.JWT_SECRET);
@@ -358,7 +399,11 @@ fastify.post("/api/auth/refresh", async (req, reply) => {
 			return reply.code(403).send({ status: "error", message: "Сессия недействительна" });
 		}
 
-		const deviceId = device_id || decoded.deviceId || "desktop-unknown";
+		if (!device_id || device_id !== decoded.deviceId) {
+			console.warn(`[AUTH REFRESH] Попытка рефреша с несовпадающим device_id. Expected: ${decoded.deviceId}, Got: ${device_id}`);
+			return reply.code(403).send({ status: "error", message: "Несовпадение аппаратного идентификатора" });
+		}
+		const deviceId = decoded.deviceId;
 
 		// Проверка Single-Session Lock
 		const sessionRaw = await redis.get(`session:${user.id}`);

@@ -11,7 +11,8 @@ use tokio_tungstenite::client_async_tls;
 use tokio_tungstenite::tungstenite::handshake::client::Request;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use url::Url;
-
+use sha2::{Sha256, Digest};
+use std::time::{SystemTime, UNIX_EPOCH};
 pub const WISP_TYPE_CONNECT: u8 = 0x01;
 pub const WISP_TYPE_DATA: u8 = 0x02;
 pub const WISP_TYPE_CONTINUE: u8 = 0x03;
@@ -44,6 +45,14 @@ impl WispClient {
             .await
             .map_err(|e| format!("Не удалось подключиться к WISP хосту напрямую {}:{}: {}", host, port, e))?;
 
+        let token = parsed_url.path().trim_start_matches("/wisp/");
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs().to_string();
+        let salt = obfstr::obfstr!(env!("WISP_SALT")).to_string();
+        
+        let mut hasher = Sha256::new();
+        hasher.update(format!("{}{}{}", token, timestamp, salt).as_bytes());
+        let signature = format!("{:x}", hasher.finalize());
+
         // Устанавливаем TLS и поднимаем WebSocket
         let request = Request::builder()
             .uri(wisp_url)
@@ -52,6 +61,8 @@ impl WispClient {
             .header("Upgrade", "websocket")
             .header("Sec-WebSocket-Version", "13")
             .header("Sec-WebSocket-Key", tokio_tungstenite::tungstenite::handshake::client::generate_key())
+            .header("X-Wisp-Timestamp", &timestamp)
+            .header("X-Wisp-Signature", &signature)
             .body(())
             .map_err(|e| format!("Ошибка формирования WebSocket запроса: {}", e))?;
 
