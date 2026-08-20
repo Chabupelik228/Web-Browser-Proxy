@@ -164,20 +164,17 @@ onMounted(async () => {
   window.addEventListener('keydown', handleKeydown);
 
   try {
-    unlistenBlur = await appWindow.listen('tauri://blur', () => {
-      closeWidget();
+    appWindow.onFocusChanged(({ payload: focused }) => {
+      if (!focused) closeWidget();
     });
   } catch (err) {
-    console.error('Ошибка подписки на blur:', err);
+    console.error('Ошибка подписки на focus:', err);
   }
 });
 
 onUnmounted(() => {
   if (channel) {
     channel.close();
-  }
-  if (unlistenBlur) {
-    unlistenBlur();
   }
   window.removeEventListener('blur', handleBlur);
   window.removeEventListener('keydown', handleKeydown);

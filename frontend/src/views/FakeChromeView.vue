@@ -200,6 +200,7 @@ const loadingAuth = ref(false);
 // Menu widget state
 const isMenuOpen = ref(false);
 const menuBtnRef = ref(null);
+const isDownloadsOpen = ref(false);
 
 // Favicon fallback
 const failedFavicons = ref(new Set());
@@ -237,6 +238,11 @@ menuChannel.onmessage = (e) => {
 
 // Downloads widget channel (receive close events only — no button in FakeChromeView)
 const downloadsChannel = new BroadcastChannel('downloads-channel');
+downloadsChannel.onmessage = (e) => {
+  if (e.data.type === 'widget-closed') {
+    isDownloadsOpen.value = false;
+  }
+};
 
 const handleMenuAction = (action) => {
   switch (action) {
@@ -282,6 +288,7 @@ const toggleDownloadsWidget = async () => {
       const isVisible = await widget.isVisible();
       if (isVisible) {
         await widget.hide();
+        isDownloadsOpen.value = false;
       } else {
         const mainWindow = getCurrentWindow();
         const pos = await mainWindow.outerPosition();
@@ -291,6 +298,7 @@ const toggleDownloadsWidget = async () => {
         
         await widget.show();
         await widget.setFocus();
+        isDownloadsOpen.value = true;
       }
     }
   } catch (err) {
@@ -313,7 +321,9 @@ const closeWidgetExternally = async (widgetLabel) => {
 };
 
 const closeAllWidgets = async () => {
+  if (!isMenuOpen.value && !isDownloadsOpen.value) return; // Prevent IPC flood
   isMenuOpen.value = false;
+  isDownloadsOpen.value = false;
   await closeWidgetExternally('menu-widget');
   await closeWidgetExternally('downloads-widget');
 };
@@ -468,6 +478,14 @@ const navigate = async () => {
 
 let unlistenListeners = [];
 
+const handleMainWindowMousedown = (e) => {
+  // If click is on menu button, let toggleMenuWidget handle it
+  if (menuBtnRef.value && menuBtnRef.value.contains(e.target)) return;
+  if (isMenuOpen.value || isDownloadsOpen.value) {
+    closeAllWidgets();
+  }
+};
+
 onMounted(async () => {
   resizeObserver = new ResizeObserver((entries) => {
     for (let entry of entries) {
@@ -488,10 +506,15 @@ onMounted(async () => {
     tabsResizeObserver.observe(tabsContainerRef.value);
   }
 
-  // Close widgets on main window move/resize
+  // Close widgets on main window move/resize/blur
   const mainWindow = getCurrentWindow();
   mainWindow.onMoved(closeAllWidgets);
   mainWindow.onResized(closeAllWidgets);
+  mainWindow.onFocusChanged(({ payload: focused }) => {
+    if (!focused) closeAllWidgets();
+  });
+
+  window.addEventListener('mousedown', handleMainWindowMousedown);
 
   unlistenListeners.push(await listen('webview-loading', (event) => {
     const { tabId } = event.payload || {};
@@ -562,6 +585,7 @@ onUnmounted(() => {
   if (resizeObserver && headerWrapper.value) resizeObserver.unobserve(headerWrapper.value);
   if (tabsResizeObserver) tabsResizeObserver.disconnect();
   unlistenListeners.forEach(u => u());
+  window.removeEventListener('mousedown', handleMainWindowMousedown);
   tabs.value.forEach(t => invoke('native_close_tab', { tabId: t.id }).catch(() => {}));
   menuChannel.close();
   downloadsChannel.close();

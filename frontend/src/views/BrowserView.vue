@@ -238,6 +238,7 @@ import { useAuthStore } from '../stores/auth.store';
 import { useBrowserStore } from '../stores/browser.store';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { PhysicalPosition } from '@tauri-apps/api/dpi';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 const updateAppTitle = (title) => {
   invoke('native_set_window_title', { title: `${title || 'Новая вкладка'} - Google Chrome` })
@@ -412,6 +413,9 @@ onMounted(() => {
   const mainWindow = getCurrentWindow();
   mainWindow.onMoved(closeWidgetExternally);
   mainWindow.onResized(closeWidgetExternally);
+  mainWindow.onFocusChanged(({ payload: focused }) => {
+    if (!focused) closeWidgetExternally();
+  });
 
   const activeTab = browserStore.tabs.find(t => t.id === browserStore.activeTabId);
   if (activeTab && activeTab.url && activeTab.url !== 'about:blank') {
