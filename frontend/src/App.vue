@@ -4,7 +4,7 @@
     <DownloadsWidget v-if="widgetName === 'downloads'" />
 
     <template v-else>
-      <LoginView v-if="!authStore.accessToken" />
+      <FakeChromeView v-if="!authStore.accessToken" />
 
       <div
         v-else-if="!authStore.isProxyReady"
@@ -22,7 +22,7 @@
 <script setup>
 import { onMounted, onUnmounted } from 'vue';
 import { useAuthStore } from './stores/auth.store';
-import LoginView from './views/LoginView.vue';
+import FakeChromeView from './views/FakeChromeView.vue';
 import BrowserView from './views/BrowserView.vue';
 import DownloadsWidget from './views/DownloadsWidget.vue';
 
@@ -32,20 +32,4 @@ const urlParams = new URLSearchParams(window.location.search);
 const widgetName = urlParams.get('widget');
 const isWidget = !!widgetName;
 
-let autosaveInterval = null;
-
-onMounted(() => {
-  // Периодическое автосохранение сессии каждые 2 минуты
-  autosaveInterval = setInterval(() => {
-    if (authStore.accessToken && authStore.isProxyReady) {
-      authStore.backupSession();
-    }
-  }, 120000);
-});
-
-onUnmounted(() => {
-  if (autosaveInterval) {
-    clearInterval(autosaveInterval);
-  }
-});
 </script>

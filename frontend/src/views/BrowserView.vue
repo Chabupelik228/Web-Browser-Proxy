@@ -432,7 +432,7 @@ onMounted(() => {
     if (tab) {
       tab.isLoading = true;
       if (browserStore.activeTabId === tabId && url) {
-        inputUrl.value = url;
+        inputUrl.value = formatDisplayUrl(url);
       }
     }
   });
@@ -444,7 +444,7 @@ onMounted(() => {
       tab.isLoading = false;
       tab.url = url;
       if (browserStore.activeTabId === tabId) {
-        inputUrl.value = url;
+        inputUrl.value = formatDisplayUrl(url);
       }
     }
   });
@@ -495,6 +495,15 @@ const scrollTabs = (offset) => {
     tabsContainer.value.scrollBy({ left: offset, behavior: 'smooth' });
   }
 };
+const formatDisplayUrl = (url) => {
+  if (!url) return '';
+  let display = url;
+  if (display.startsWith('http://')) display = display.substring(7);
+  if (display.startsWith('https://')) display = display.substring(8);
+  if (display.startsWith('www.')) display = display.substring(4);
+  if (display.endsWith('/')) display = display.substring(0, display.length - 1);
+  return display;
+};
 const inputUrl = ref('');
 const startPageInput = ref('');
 const failedFavicons = ref(new Set());
@@ -504,24 +513,10 @@ const isCurrentStartPage = computed(() => {
   return !activeTab || !activeTab.url || activeTab.url === '' || activeTab.url === 'about:blank';
 });
 
-let backupTimeout = null;
-const scheduleBackup = () => {
-  if (backupTimeout) clearTimeout(backupTimeout);
-  backupTimeout = setTimeout(() => {
-    if (authStore.accessToken && authStore.isProxyReady) {
-      authStore.backupSession();
-    }
-  }, 1000);
-};
-
-watch(() => browserStore.tabs, () => {
-  scheduleBackup();
-}, { deep: true });
-
 watch(() => browserStore.activeTabId, async (newId) => {
   const activeTab = browserStore.tabs.find(t => t.id === newId);
   if (activeTab) {
-    inputUrl.value = activeTab.url || '';
+    inputUrl.value = formatDisplayUrl(activeTab.url || '');
     startPageInput.value = '';
     try {
       await invoke('native_switch_tab', { tabId: newId });
@@ -570,7 +565,7 @@ const processNavigation = async (tabId, targetUrl) => {
   }
   
   if (tabId === browserStore.activeTabId) {
-    inputUrl.value = url;
+    inputUrl.value = formatDisplayUrl(url);
   }
   
   try {

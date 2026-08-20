@@ -2,6 +2,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::io::Cursor;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -13,7 +14,8 @@ use url::Url;
 
 pub const WISP_TYPE_CONNECT: u8 = 0x01;
 pub const WISP_TYPE_DATA: u8 = 0x02;
-pub const WISP_TYPE_CLOSE: u8 = 0x03;
+pub const WISP_TYPE_CONTINUE: u8 = 0x03;
+pub const WISP_TYPE_CLOSE: u8 = 0x04;
 pub const WISP_STREAM_TCP: u8 = 0x01;
 
 #[derive(Clone)]
@@ -21,59 +23,26 @@ pub struct WispClient {
     ws_tx: mpsc::Sender<Message>,
     stream_channels: Arc<Mutex<HashMap<u32, mpsc::Sender<Vec<u8>>>>>,
     next_stream_id: Arc<Mutex<u32>>,
+    /// Флаг жизни WebSocket-соединения. Когда sender или receiver задача завершается
+    /// (WebSocket разорван), флаг ставится в false.
+    alive: Arc<AtomicBool>,
 }
 
 impl WispClient {
+    /// Проверяет, живо ли WebSocket-соединение к WISP-серверу.
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::SeqCst)
+    }
+
     pub async fn connect(wisp_url: &str) -> Result<Self, String> {
         let parsed_url = Url::parse(wisp_url).map_err(|e| format!("Некорректный WISP URL: {}", e))?;
         let host = parsed_url.host_str().ok_or("Отсутствует хост в WISP URL")?.to_string();
         let port = parsed_url.port_or_known_default().unwrap_or(443);
 
-        // Проверяем наличие апстрим-прокси (ЕСПД / локальный Squid)
-        let upstream_proxy = std::env::var("UPSTREAM_PROXY")
-            .or_else(|_| std::env::var("HTTPS_PROXY"))
-            .or_else(|_| std::env::var("HTTP_PROXY"))
-            .ok();
-
-        let tcp_stream = if let Some(ref proxy_str) = upstream_proxy {
-            let proxy_clean = proxy_str.trim_start_matches("http://").trim_start_matches("https://");
-            let (p_host, p_port) = proxy_clean
-                .split_once(':')
-                .map(|(h, p)| (h, p.parse::<u16>().unwrap_or(3128)))
-                .unwrap_or((proxy_clean, 3128));
-
-            log::info!("[WISP] Подключение через апстрим-прокси {}:{} к {}:{}", p_host, p_port, host, port);
-
-            let mut stream = TcpStream::connect((p_host, p_port))
-                .await
-                .map_err(|e| format!("Не удалось подключиться к прокси {}:{}: {}", p_host, p_port, e))?;
-
-            let connect_req = format!(
-                "CONNECT {}:{} HTTP/1.1\r\nHost: {}:{}\r\nProxy-Connection: Keep-Alive\r\n\r\n",
-                host, port, host, port
-            );
-            stream
-                .write_all(connect_req.as_bytes())
-                .await
-                .map_err(|e| format!("Ошибка отправки CONNECT в прокси: {}", e))?;
-
-            let mut resp_buf = [0u8; 1024];
-            let n = stream
-                .read(&mut resp_buf)
-                .await
-                .map_err(|e| format!("Ошибка чтения ответа от прокси: {}", e))?;
-
-            let resp_str = String::from_utf8_lossy(&resp_buf[..n]);
-            if !resp_str.starts_with("HTTP/1.1 200") && !resp_str.starts_with("HTTP/1.0 200") {
-                return Err(format!("Прокси отклонил CONNECT туннель: {}", resp_str));
-            }
-
-            stream
-        } else {
-            TcpStream::connect((host.as_str(), port))
-                .await
-                .map_err(|e| format!("Не удалось подключиться к WISP хосту напрямую {}:{}: {}", host, port, e))?
-        };
+        // Проверяем наличие апстрим-прокси
+        let tcp_stream = TcpStream::connect((host.as_str(), port))
+            .await
+            .map_err(|e| format!("Не удалось подключиться к WISP хосту напрямую {}:{}: {}", host, port, e))?;
 
         // Устанавливаем TLS и поднимаем WebSocket
         let request = Request::builder()
@@ -96,14 +65,22 @@ impl WispClient {
         let stream_channels = Arc::new(Mutex::new(HashMap::<u32, mpsc::Sender<Vec<u8>>>::new()));
         let stream_channels_rx = stream_channels.clone();
 
+        let alive = Arc::new(AtomicBool::new(true));
+        let alive_tx = alive.clone();
+        let alive_rx = alive.clone();
+
+        // Sender task: пересылает сообщения из канала в WebSocket
         tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
                 if ws_sink.send(msg).await.is_err() {
                     break;
                 }
             }
+            alive_tx.store(false, Ordering::SeqCst);
+            log::warn!("[WISP] WebSocket sender task завершилась — соединение разорвано");
         });
 
+        // Receiver task: читает из WebSocket и раздаёт по stream-каналам
         tokio::spawn(async move {
             while let Some(Ok(msg)) = ws_source.next().await {
                 if let Message::Binary(data) = msg {
@@ -124,15 +101,20 @@ impl WispClient {
                     } else if packet_type == WISP_TYPE_CLOSE {
                         let mut channels = stream_channels_rx.lock().await;
                         channels.remove(&stream_id);
+                    } else if packet_type == WISP_TYPE_CONTINUE {
+                        // CONTINUE is used for flow control in WISP v2. We ignore it for now as we don't strictly enforce flow control.
                     }
                 }
             }
+            alive_rx.store(false, Ordering::SeqCst);
+            log::warn!("[WISP] WebSocket receiver task завершилась — соединение разорвано");
         });
 
         Ok(Self {
             ws_tx: tx,
             stream_channels,
             next_stream_id: Arc::new(Mutex::new(1)),
+            alive,
         })
     }
 
@@ -231,9 +213,10 @@ impl tokio::io::AsyncWrite for WispStream {
     }
 
     fn poll_shutdown(self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), std::io::Error>> {
-        let mut packet = Vec::with_capacity(5);
+        let mut packet = Vec::with_capacity(6);
         packet.push(WISP_TYPE_CLOSE);
         byteorder::WriteBytesExt::write_u32::<LittleEndian>(&mut packet, self.stream_id).unwrap();
+        packet.push(0x01); // Reason code 0x01 = Voluntary
         let _ = self.ws_tx.try_send(Message::Binary(packet.into()));
         std::task::Poll::Ready(Ok(()))
     }

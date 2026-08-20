@@ -10,13 +10,24 @@ pub fn get_device_id() -> String {
     get_hardware_fingerprint()
 }
 
-/// Запускает Wisp-туннель к VPS и поднимает локальный прокси
+/// Запускает Wisp-туннель к VPS и поднимает локальный прокси.
+/// Перед переключением в Tunnel-режим чистит весь кэш WebView2,
+/// чтобы исключить утечку данных из FakeChromeView (кэшированные страницы с реальным IP).
 #[tauri::command]
 pub async fn start_tunnel(
+    app: tauri::AppHandle,
     wisp_url: String,
     token: String,
     manager: State<'_, TunnelManager>,
 ) -> Result<ProxyConnectionInfo, String> {
+    // Чистим ВСЕ данные браузера (cookies, cache, localStorage) ПЕРЕД подключением к WISP.
+    // Это критически важно: без этого WebView2 может отдать кэшированную страницу
+    // с реальным IP из сессии FakeChromeView.
+    for (_label, wv) in app.webviews() {
+        let _ = wv.clear_all_browsing_data();
+    }
+    log::info!("[TUNNEL] Browsing data cleared before switching to Tunnel mode");
+
     manager.start(&wisp_url, &token).await
 }
 
@@ -31,6 +42,16 @@ pub fn stop_tunnel(manager: State<'_, TunnelManager>) -> Result<(), String> {
 #[tauri::command]
 pub fn get_tunnel_status(manager: State<'_, TunnelManager>) -> Option<ProxyConnectionInfo> {
     manager.get_info()
+}
+
+/// Полная очистка данных браузера (cookies, cache, localStorage) для всех webview.
+/// Используется при переключении между режимами для предотвращения утечек через кэш.
+#[tauri::command]
+pub fn native_clear_browsing_data(app: tauri::AppHandle) {
+    for (_label, wv) in app.webviews() {
+        let _ = wv.clear_all_browsing_data();
+    }
+    log::info!("[CLEAR] All browsing data cleared");
 }
 
 

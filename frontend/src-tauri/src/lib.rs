@@ -1,4 +1,3 @@
-// frontend/src-tauri/src/lib.rs
 pub mod browser;
 pub mod commands;
 pub mod security;
@@ -11,25 +10,38 @@ use tunnel::TunnelManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Загружаем переменные окружения
+    // Полное удаление всех данных (cookies, localStorage, cache) ДО запуска WebView2,
+    // чтобы избежать блокировки файлов и ERR_CACHE_READ_FAILURE
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        let path = std::path::Path::new(&local_app_data).join("com.tauri.dev");
+        let _ = std::fs::remove_dir_all(&path);
+    }
+    if let Ok(app_data) = std::env::var("APPDATA") {
+        let path = std::path::Path::new(&app_data).join("com.tauri.dev");
+        let _ = std::fs::remove_dir_all(&path);
+    }
+
     dotenvy::from_path("../.env").expect("FATAL: .env file is missing in frontend/");
     
     let proxy_port = std::env::var("VITE_LOCAL_PROXY_PORT").expect("FATAL: VITE_LOCAL_PROXY_PORT is not set in .env");
-    let api_domain = std::env::var("VITE_API_DOMAIN").expect("FATAL: VITE_API_DOMAIN is not set in .env");
-
     let proxy_args = format!(
-        "--proxy-server=http://127.0.0.1:{} --proxy-bypass-list=127.0.0.1,localhost,tauri.localhost,{} --disable-features=AutofillServerCommunication,PasswordManager --disable-save-password-bubble --disable-single-click-autofill",
-        proxy_port, api_domain
+        "--proxy-server=127.0.0.1:{} --proxy-bypass-list=127.0.0.1,localhost,tauri.localhost,ipc.localhost,web.chabupelik.su --disable-features=AutofillServerCommunication,PasswordManager --disable-save-password-bubble --disable-single-click-autofill --enforce-webrtc-ip-permission-check --force-webrtc-ip-handling-policy=disable_non_proxied_udp --disable-quic",
+        proxy_port
     );
 
-    // Единые аргументы для ВСЕХ WebView2 инстансов
-    std::env::set_var(
-        "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-        proxy_args,
-    );
+    std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", proxy_args);
 
     let tunnel_manager = TunnelManager::new();
     let tab_manager = TabManager::new();
+    
+    // Запускаем глобальный прокси-сервер на старте
+    let port_num = proxy_port.parse::<u16>().unwrap_or(11338);
+    let tm_clone = tunnel_manager.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = tm_clone.init_global_proxy(port_num).await {
+            log::error!("Не удалось запустить локальный прокси: {}", e);
+        }
+    });
 
     tauri::Builder::default()
         .manage(tunnel_manager)
@@ -49,6 +61,7 @@ pub fn run() {
             start_tunnel,
             stop_tunnel,
             get_tunnel_status,
+            native_clear_browsing_data,
             native_navigate_tab,
             native_switch_tab,
             native_close_tab,
@@ -91,3 +104,12 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+
+
+
+
+
+
+
+

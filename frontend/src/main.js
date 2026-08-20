@@ -7,5 +7,5 @@ import './assets/index.css';
 const app = createApp(App);
 const pinia = createPinia();
 
-app.use(pinia);
+app.config.errorHandler = (err, vm, info) => { alert('Vue Error: ' + err.toString() + ' | ' + info); console.error(err); }; window.addEventListener('error', e => alert('Window Error: ' + e.message)); app.use(pinia);
 app.mount('#app');

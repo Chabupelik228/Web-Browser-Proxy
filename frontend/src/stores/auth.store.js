@@ -104,8 +104,6 @@ export const useAuthStore = defineStore('auth', () => {
         }
     };
 
-
-
     // Выход из сессии с зачисткой следов
     const logout = async () => {
         try {
@@ -121,7 +119,6 @@ export const useAuthStore = defineStore('auth', () => {
             localStorage.removeItem('chabupelik_auth');
             user.value = null;
             accessToken.value = '';
-            masterPassword.value = '';
             isProxyReady.value = false;
             proxyInfo.value = null;
             delete axios.defaults.headers.common['Authorization'];

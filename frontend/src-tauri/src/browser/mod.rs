@@ -232,7 +232,8 @@ impl TabManager {
         let init_script = base_script.replace("{{TAB_ID}}", &t_id_ipc);
 
         let t_id_load = t_id.clone();
-        let builder = WebviewBuilder::new(&label, parsed_url)
+        let mut builder = WebviewBuilder::new(&label, parsed_url)
+            .incognito(tab_id.starts_with("fake_"))
             .initialization_script(&init_script)
             .on_page_load(move |webview, _payload| {
                 // Автоматическая перезагрузка при первом открытии вкладки в сессии (решает проблему белого экрана ChatGPT/YouTube)

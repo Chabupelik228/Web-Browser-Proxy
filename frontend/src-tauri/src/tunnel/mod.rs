@@ -1,24 +1,15 @@
-// frontend/src-tauri/src/tunnel/mod.rs
 pub mod loopback;
 pub mod wisp;
 
-use loopback::LoopbackProxyServer;
+use loopback::{LoopbackProxyServer, ProxyMode};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use wisp::WispClient;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct TunnelManager {
-    inner: Arc<Mutex<Option<ActiveTunnel>>>,
-}
-
-#[allow(dead_code)]
-struct ActiveTunnel {
-    pub port: u16,
-    pub session_secret: String,
-    pub shutdown_tx: tokio::sync::watch::Sender<bool>,
-    pub wisp_url: String,
-    pub jwt_token: String,
+    // В новой архитектуре у нас глобальный сервер
+    pub proxy_server: Arc<Mutex<Option<LoopbackProxyServer>>>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -31,73 +22,82 @@ pub struct ProxyConnectionInfo {
 impl TunnelManager {
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(None)),
+            proxy_server: Arc::new(Mutex::new(None)),
         }
     }
 
-    /// Запускает защищенный туннель к VPS через Wisp и поднимает локальный прокси
-    pub async fn start(&self, wisp_base_url: &str, jwt_token: &str) -> Result<ProxyConnectionInfo, String> {
-        // Если туннель уже был запущен — останавливаем старый
-        self.stop();
+    /// Инициализация глобального локального прокси при старте приложения
+    pub async fn init_global_proxy(&self, proxy_port: u16) -> Result<(), String> {
+        let server = LoopbackProxyServer::start(proxy_port).await?;
+        let mut guard = self.proxy_server.lock();
+        *guard = Some(server);
+        Ok(())
+    }
 
+    /// Подключение к WISP и передача клиента в глобальный прокси.
+    /// Переключает режим прокси в Tunnel — после этого ни один запрос не пройдёт напрямую.
+    pub async fn start(&self, wisp_base_url: &str, jwt_token: &str) -> Result<ProxyConnectionInfo, String> {
         let formatted_url = if wisp_base_url.ends_with('/') {
             format!("{}{}", wisp_base_url, urlencoding::encode(jwt_token))
         } else {
             format!("{}/{}", wisp_base_url, urlencoding::encode(jwt_token))
         };
 
-        // 1. Подключаемся к Wisp шлюзу на VPS
+        // Подключаемся к WISP
         let wisp_client = WispClient::connect(&formatted_url).await?;
 
-        // 2. Поднимаем локальный прокси с секретом
-        let server = LoopbackProxyServer::start(wisp_client).await?;
-
-        let port = server.port;
-        let session_secret = server.session_secret.clone();
-
-        // Пробрасываем локальный прокси в системное окружение процесса
-        let proxy_url = format!("http://127.0.0.1:{}", port);
-        std::env::set_var("HTTP_PROXY", &proxy_url);
-        std::env::set_var("HTTPS_PROXY", &proxy_url);
-        std::env::set_var("ALL_PROXY", &proxy_url);
-
-        {
-            let mut guard = self.inner.lock();
-            *guard = Some(ActiveTunnel {
-                port,
-                session_secret: session_secret.clone(),
-                shutdown_tx: server.shutdown_tx,
-                wisp_url: wisp_base_url.to_string(),
-                jwt_token: jwt_token.to_string(),
-            });
-        }
+        // Закидываем авторизованный клиент в глобальный прокси
+        // и СРАЗУ переключаем режим в Tunnel (ДО того, как вернуть Ok)
+        let port = {
+            let guard = self.proxy_server.lock();
+            if let Some(server) = guard.as_ref() {
+                // Сначала ставим WISP-клиент
+                {
+                    let mut wisp_guard = server.wisp_client.lock();
+                    *wisp_guard = Some(wisp_client);
+                }
+                // Затем переключаем режим в Tunnel — теперь все запросы идут только через WISP
+                server.set_mode(ProxyMode::Tunnel);
+                server.port
+            } else {
+                return Err("Глобальный прокси не инициализирован!".to_string());
+            }
+        };
 
         Ok(ProxyConnectionInfo {
             local_port: port,
-            session_secret,
+            session_secret: "unused".to_string(),
             is_active: true,
         })
     }
 
-    /// Останавливает туннель и закрывает локальный порт
+    /// Остановка WISP-туннеля (переход в прозрачный режим для фейк-браузера)
     pub fn stop(&self) {
-        std::env::remove_var("HTTP_PROXY");
-        std::env::remove_var("HTTPS_PROXY");
-        std::env::remove_var("ALL_PROXY");
-
-        let mut guard = self.inner.lock();
-        if let Some(tunnel) = guard.take() {
-            let _ = tunnel.shutdown_tx.send(true);
+        let guard = self.proxy_server.lock();
+        if let Some(server) = guard.as_ref() {
+            // Сначала переключаем режим обратно в Transparent
+            server.set_mode(ProxyMode::Transparent);
+            // Затем очищаем WISP-клиент
+            let mut wisp_guard = server.wisp_client.lock();
+            *wisp_guard = None;
         }
     }
 
-    /// Проверяет статус и возвращает текущую информацию о прокси
     pub fn get_info(&self) -> Option<ProxyConnectionInfo> {
-        let guard = self.inner.lock();
-        guard.as_ref().map(|t| ProxyConnectionInfo {
-            local_port: t.port,
-            session_secret: t.session_secret.clone(),
-            is_active: true,
-        })
+        let guard = self.proxy_server.lock();
+        if let Some(server) = guard.as_ref() {
+            let mode = {
+                let mode_guard = server.mode.lock();
+                *mode_guard
+            };
+            if mode == ProxyMode::Tunnel {
+                return Some(ProxyConnectionInfo {
+                    local_port: server.port,
+                    session_secret: "unused".to_string(),
+                    is_active: true,
+                });
+            }
+        }
+        None
     }
 }
