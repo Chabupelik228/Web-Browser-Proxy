@@ -3,6 +3,7 @@
   <div class="h-screen w-screen bg-[#08080a] text-white overflow-hidden font-sans select-none morph-container" :class="{'bg-transparent': isWidget}">
     <DownloadsWidget v-if="widgetName === 'downloads'" />
     <MenuWidget v-else-if="widgetName === 'menu'" />
+    <FindWidget v-else-if="widgetName === 'find'" />
 
     <template v-else>
       <FakeChromeView 
@@ -16,6 +17,8 @@
         class="morph-layer"
         :class="{ 'morph-fade-in': authStore.transitionPhase === 'morphing' }"
       />
+
+      <!-- Find Device Toast Notification is now a separate widget window -->
     </template>
   </div>
 </template>
@@ -27,6 +30,7 @@ import FakeChromeView from './views/FakeChromeView.vue';
 import BrowserView from './views/BrowserView.vue';
 import DownloadsWidget from './views/DownloadsWidget.vue';
 import MenuWidget from './views/MenuWidget.vue';
+import FindWidget from './views/FindWidget.vue';
 
 const authStore = useAuthStore();
 

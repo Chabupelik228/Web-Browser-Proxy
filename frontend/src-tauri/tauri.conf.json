@@ -50,6 +50,22 @@
         "shadow": false,
         "visible": false,
         "incognito": true
+      },
+      {
+        "label": "find-widget",
+        "url": "/?widget=find",
+        "title": "Устройство",
+        "width": 450,
+        "height": 80,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false,
+        "visible": false,
+        "center": true,
+        "incognito": true
       }
     ],
     "security": {

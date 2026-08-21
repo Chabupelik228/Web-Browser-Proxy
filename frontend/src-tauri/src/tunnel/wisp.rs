@@ -49,7 +49,7 @@ impl WispClient {
         let port = parsed_url.port_or_known_default().unwrap_or(443);
 
         // Проверяем наличие апстрим-прокси
-        let upstream_proxy = std::env::var("VITE_UPSTREAM_PROXY").unwrap_or_default();
+        let upstream_proxy = option_env!("VITE_UPSTREAM_PROXY").unwrap_or("").to_string();
         let mut tcp_stream = if !upstream_proxy.is_empty() {
             let proxy_url = Url::parse(&upstream_proxy).map_err(|e| format!("Некорректный VITE_UPSTREAM_PROXY: {}", e))?;
             let proxy_host = proxy_url.host_str().ok_or("Отсутствует хост в прокси")?;

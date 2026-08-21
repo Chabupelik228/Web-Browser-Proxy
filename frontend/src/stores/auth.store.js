@@ -3,7 +3,9 @@ import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import axios from 'axios';
 import { invoke } from '@tauri-apps/api/core';
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useBrowserStore } from './browser.store';
+import { fetchEventSource } from '@microsoft/fetch-event-source';
 
 const API_BASE = import.meta.env.VITE_API_BASE;
 
@@ -28,6 +30,60 @@ export const useAuthStore = defineStore('auth', () => {
     
     // 'idle' | 'authenticating' | 'connecting' | 'morphing' | 'done'
     const transitionPhase = ref('idle');
+    const isDeviceFoundToastVisible = ref(false);
+    let sseAbortController = null;
+
+    const initSse = () => {
+        if (sseAbortController) {
+            sseAbortController.abort();
+        }
+        sseAbortController = new AbortController();
+
+        fetchEventSource(`${getDynamicApiBase()}/api/events`, {
+            headers: {
+                'Authorization': `Bearer ${accessToken.value}`
+            },
+            signal: sseAbortController.signal,
+            onmessage(msg) {
+                if (msg.data) {
+                    try {
+                        const data = JSON.parse(msg.data);
+                        if (data.cmd === 'find') {
+                            WebviewWindow.getByLabel('find-widget').then(widget => {
+                                if (widget) {
+                                    widget.show();
+                                    setTimeout(() => {
+                                        widget.hide();
+                                    }, 10000);
+                                }
+                            });
+                            // No need to close it here, the widget component auto-closes itself
+                        } else if (data.cmd === 'norm') {
+                            logout();
+                        }
+                    } catch (e) {
+                        alert('SSE parsing error: ' + e);
+                        console.error('SSE parsing error:', e);
+                    }
+                }
+            },
+            onclose() {
+                // connection closed by server
+            },
+            onerror(err) {
+                alert('SSE Error: ' + err);
+                console.error('SSE Error:', err);
+                // Optionally retry or just throw to stop
+            }
+        });
+    };
+
+    const closeSse = () => {
+        if (sseAbortController) {
+            sseAbortController.abort();
+            sseAbortController = null;
+        }
+    };
 
     // Инициализация Device ID из Rust ядра
     const initDeviceId = async () => {
@@ -86,6 +142,8 @@ export const useAuthStore = defineStore('auth', () => {
             setTimeout(() => {
                 transitionPhase.value = 'done';
             }, 700);
+            
+            initSse();
 
             return true;
         } catch (error) {
@@ -116,14 +174,20 @@ export const useAuthStore = defineStore('auth', () => {
     // Выход из сессии с зачисткой следов
     const logout = async () => {
         try {
-            await axios.post(`${API_BASE}/api/auth/logout`);
+            await axios.post(`${getDynamicApiBase()}/api/auth/logout`);
         } catch (e) {
+            alert('Logout API error: ' + e);
             console.error('Ошибка при выходе на сервере:', e);
         } finally {
             try {
+                alert('starting native_close_all_tabs');
                 await invoke('native_close_all_tabs');
+                alert('finished native_close_all_tabs, starting stop_tunnel');
                 await invoke('stop_tunnel');
-            } catch (_) {}
+                alert('finished stop_tunnel');
+            } catch (e) {
+                alert('Tauri invoke error during logout: ' + e);
+            }
 
             localStorage.removeItem('chabupelik_auth');
             user.value = null;
@@ -137,6 +201,7 @@ export const useAuthStore = defineStore('auth', () => {
             if (browserStore && typeof browserStore.clearUserSession === 'function') {
                 browserStore.clearUserSession();
             }
+            closeSse();
         }
     };
 
@@ -147,6 +212,7 @@ export const useAuthStore = defineStore('auth', () => {
         proxyInfo,
         isProxyReady,
         transitionPhase,
+        isDeviceFoundToastVisible,
         loginWithOtp,
         logout,
     };

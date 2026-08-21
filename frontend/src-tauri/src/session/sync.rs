@@ -104,7 +104,7 @@ pub async fn sync_and_cleanup(
 
     // 3. Отправка POST /api/sync
     let client = reqwest::Client::new();
-    let api_domain = env::var("VITE_API_DOMAIN").unwrap_or_else(|_| "localhost:3000".to_string());
+    let api_domain = option_env!("VITE_API_DOMAIN").unwrap_or("").to_string();
     
     // Поддержка http для локальной разработки, https для прода (зависит от VITE_API_DOMAIN)
     let url = if api_domain.starts_with("http") {

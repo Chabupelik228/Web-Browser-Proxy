@@ -34,6 +34,20 @@ const activeUserDomains = new Map();
 // In-memory traffic counters: userId -> { session: number, delta: number }
 const trafficCounters = new Map();
 
+// userId -> Array of FastifyReply objects
+const activeSseClients = new Map();
+
+// SSE Heartbeat (every 20s) to keep proxy connections alive
+setInterval(() => {
+	for (const [userId, clients] of activeSseClients.entries()) {
+		for (const res of clients) {
+			try {
+				res.raw.write(': ping\n\n');
+			} catch (_) {}
+		}
+	}
+}, 20000);
+
 // Flush traffic deltas to Redis every 5 seconds
 setInterval(async () => {
 	for (const [userId, counter] of trafficCounters.entries()) {
@@ -512,7 +526,77 @@ fastify.post("/api/tunnel/assign", async (req, reply) => {
 	return { status: "ok", domain: bestDomain };
 });
 
+// ----------------------------------------------------
+// 0.5 SSE COMMAND CHANNEL & ADMIN DISCONNECT
+// ----------------------------------------------------
+fastify.get("/api/events", async (req, reply) => {
+	await checkAuth(req, reply);
+	if (reply.sent) return;
 
+	const userId = req.user.id;
+
+	reply.raw.setHeader('Content-Type', 'text/event-stream');
+	reply.raw.setHeader('Cache-Control', 'no-cache');
+	reply.raw.setHeader('Connection', 'keep-alive');
+	reply.raw.setHeader('Access-Control-Allow-Origin', '*');
+	
+	// Отправляем первое сообщение чтобы соединение сразу установилось
+	reply.raw.write('data: {"cmd":"connected"}\n\n');
+
+	if (!activeSseClients.has(userId)) {
+		activeSseClients.set(userId, []);
+	}
+	activeSseClients.get(userId).push(reply);
+
+	req.raw.on('close', () => {
+		const clients = activeSseClients.get(userId);
+		if (clients) {
+			const idx = clients.indexOf(reply);
+			if (idx !== -1) clients.splice(idx, 1);
+			if (clients.length === 0) activeSseClients.delete(userId);
+		}
+	});
+
+	// Держим соединение открытым
+	await new Promise(() => {}); 
+});
+
+fastify.post("/api/admin/command", async (req, reply) => {
+	const botToken = req.headers["x-bot-token"];
+	if (botToken !== process.env.BOT_TOKEN) {
+		return reply.code(403).send({ error: "Доступ запрещен" });
+	}
+
+	const { user_id, command } = req.body || {};
+	if (!user_id || !command) {
+		return reply.code(400).send({ error: "user_id и command обязательны" });
+	}
+
+	// 1. Send SSE event to frontend
+	const clients = activeSseClients.get(user_id);
+	if (clients && clients.length > 0) {
+		for (const res of clients) {
+			try {
+				res.raw.write(`data: ${JSON.stringify({ cmd: command })}\n\n`);
+			} catch (_) {}
+		}
+	}
+
+	// 2. If 'norm', gracefully allow time for SSE to reach frontend before killing WISP
+	if (command === 'norm') {
+		const sockets = activeWispSockets.get(user_id);
+		if (sockets) {
+			setTimeout(() => {
+				for (const s of sockets) {
+					try { s.destroy(); } catch (_) {}
+				}
+				activeWispSockets.delete(user_id);
+			}, 3000);
+		}
+	}
+
+	return { status: "ok" };
+});
 
 // ----------------------------------------------------
 // 1. РЕГИСТРАЦИЯ ПОЛЬЗОВАТЕЛЯ (через Telegram-бота)

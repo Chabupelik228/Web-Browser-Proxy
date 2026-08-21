@@ -215,8 +215,8 @@ async fn handle_client_connection(
     } else {
         // Обработка обычных HTTP-запросов (не CONNECT) и PAC-скрипта
         if target.ends_with("/proxy.pac") {
-            let proxy_port = std::env::var("VITE_LOCAL_PROXY_PORT").unwrap_or_else(|_| "11338".to_string());
-            let api_domain = std::env::var("VITE_API_DOMAIN").unwrap_or_else(|_| "localhost".to_string());
+            let proxy_port = option_env!("VITE_LOCAL_PROXY_PORT").unwrap_or("11338").to_string();
+            let api_domain = option_env!("VITE_API_DOMAIN").unwrap_or("").to_string();
             let pac_script = format!(
                 "function FindProxyForURL(url, host) {{ if (shExpMatch(host, '127.0.0.1') || shExpMatch(host, 'localhost') || shExpMatch(host, 'tauri.localhost') || shExpMatch(host, 'ipc.localhost') || shExpMatch(host, '{}')) return 'DIRECT'; return 'PROXY 127.0.0.1:{}'; }}",
                 api_domain, proxy_port

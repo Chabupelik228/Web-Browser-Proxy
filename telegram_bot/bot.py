@@ -94,7 +94,7 @@ async def admin_panel(message: types.Message, state: FSMContext):
         return
     await state.clear()
     sent = await message.answer("🛠 *Панель администратора*\n\nВыберите раздел для управления белыми списками:", reply_markup=get_admin_keyboard())
-    asyncio.create_task(delete_messages_later(message, sent, 600))
+    asyncio.create_task(delete_messages_later(message, sent, 300))
 
 async def render_admin_list(message: types.Message, type_name: str):
     if type_name == "ip":
@@ -186,6 +186,17 @@ async def api_fetch_traffic():
         print("API error traffic:", e)
     return {}
 
+async def api_send_command(user_id, command):
+    headers = {"x-bot-token": API_SECRET, "Content-Type": "application/json"}
+    payload = {"user_id": user_id, "command": command}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"{API_BASE}/api/admin/command", json=payload, headers=headers) as resp:
+                return resp.status == 200
+    except Exception as e:
+        print("API error command:", e)
+        return False
+
 def format_bytes(b):
     if b < 1024:
         return f"{b} B"
@@ -228,7 +239,9 @@ async def render_dbusers_page(message: types.Message, page: int):
 @dp.callback_query(F.data.startswith("u_"))
 async def handle_dbusers_callbacks(call: CallbackQuery, state: FSMContext):
     if str(call.from_user.id) != ADMIN_ID: return
-    action, val = call.data.split(":")
+    parts = call.data.split(":")
+    action = parts[0]
+    val = parts[1]
     
     if action == "u_page":
         await render_dbusers_page(call.message, int(val))
@@ -267,6 +280,8 @@ async def handle_dbusers_callbacks(call: CallbackQuery, state: FSMContext):
         )
         
         kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔍 Найти устройство", callback_data=f"u_cmd:find:{u['id']}")],
+            [InlineKeyboardButton(text="🚪 Обычный режим", callback_data=f"u_cmd:norm:{u['id']}")],
             [InlineKeyboardButton(text="✒️ Изменить Имя", callback_data=f"u_edit:{u['id']}")],
             [InlineKeyboardButton(text="❌ Удалить", callback_data=f"u_del:{u['id']}")],
             [InlineKeyboardButton(text="🔙 К списку", callback_data="admin_dbusers")]
@@ -279,12 +294,20 @@ async def handle_dbusers_callbacks(call: CallbackQuery, state: FSMContext):
             await render_dbusers_page(call.message, 0)
         else:
             await call.answer("Ошибка сервера", show_alert=True)
+    elif action == "u_cmd":
+        cmd = parts[1]
+        uid = parts[2]
+        success = await api_send_command(uid, cmd)
+        if success:
+            await call.answer("Команда отправлена!", show_alert=True)
+        else:
+            await call.answer("Ошибка отправки команды", show_alert=True)
     elif action == "u_edit":
         await state.update_data(edit_user_id=val)
         await state.set_state(AdminStates.waiting_for_user_new_name)
         
         sent = await call.message.answer("✏️ Введите новое имя для этого пользователя:")
-        asyncio.create_task(delete_messages_later(sent, delay=600))
+        asyncio.create_task(delete_messages_later(sent, delay=300))
         await call.answer()
     
     try: await call.answer()
@@ -301,7 +324,7 @@ async def process_edit_user_name(message: types.Message, state: FSMContext):
         sent = await message.answer(f"✅ Имя пользователя обновлено на '{new_name}'.")
     else:
         sent = await message.answer("❌ Ошибка сервера при обновлении имени.")
-    asyncio.create_task(delete_messages_later(message, sent, 600))
+    asyncio.create_task(delete_messages_later(message, sent, 300))
     await state.clear()
 
 @dp.callback_query(F.data.startswith("toggle_"))
@@ -346,12 +369,12 @@ async def add_callback(call: CallbackQuery, state: FSMContext):
         await state.update_data(del_type="")
         await state.set_state(AdminStates.waiting_for_ip)
         sent = await call.message.answer("Введите IP или CIDR для ДОБАВЛЕНИЯ (например, 192.168.1.1 или 10.0.0.0/24):")
-        asyncio.create_task(delete_messages_later(sent, delay=600))
+        asyncio.create_task(delete_messages_later(sent, delay=300))
     else:
         await state.update_data(del_type="")
         await state.set_state(AdminStates.waiting_for_tg_id)
         sent = await call.message.answer("Введите Telegram ID для ДОБАВЛЕНИЯ:")
-        asyncio.create_task(delete_messages_later(sent, delay=600))
+        asyncio.create_task(delete_messages_later(sent, delay=300))
     await call.answer()
 
 @dp.callback_query(F.data.startswith("del_"))
@@ -364,12 +387,12 @@ async def del_callback(call: CallbackQuery, state: FSMContext):
         await state.update_data(del_type="ip")
         await state.set_state(AdminStates.waiting_for_ip)
         sent = await call.message.answer("Введите IP для УДАЛЕНИЯ:")
-        asyncio.create_task(delete_messages_later(sent, delay=600))
+        asyncio.create_task(delete_messages_later(sent, delay=300))
     else:
         await state.update_data(del_type="tg")
         await state.set_state(AdminStates.waiting_for_tg_id)
         sent = await call.message.answer("Введите TG ID для УДАЛЕНИЯ:")
-        asyncio.create_task(delete_messages_later(sent, delay=600))
+        asyncio.create_task(delete_messages_later(sent, delay=300))
     await call.answer()
 
 @dp.message(AdminStates.waiting_for_ip)
@@ -393,7 +416,7 @@ async def process_ip_input(message: types.Message, state: FSMContext):
     except ValueError:
         sent = await message.answer("❌ Некорректный формат IP.")
         
-    asyncio.create_task(delete_messages_later(message, sent, 600))
+    asyncio.create_task(delete_messages_later(message, sent, 300))
     await state.clear()
 
 @dp.message(AdminStates.waiting_for_tg_id)
@@ -404,7 +427,7 @@ async def process_tg_input(message: types.Message, state: FSMContext):
     
     if tg_str != "all" and not tg_str.isdigit():
         sent = await message.answer("❌ TG ID должен быть числом.")
-        asyncio.create_task(delete_messages_later(message, sent, 600))
+        asyncio.create_task(delete_messages_later(message, sent, 300))
         await state.clear()
         return
         
@@ -415,7 +438,7 @@ async def process_tg_input(message: types.Message, state: FSMContext):
             sent = await message.answer(f"✅ TG ID {tg_str} удален.")
         else:
             sent = await message.answer("❌ Ошибка сервера.")
-        asyncio.create_task(delete_messages_later(message, sent, 600))
+        asyncio.create_task(delete_messages_later(message, sent, 300))
         await state.clear()
     else:
         # add action
@@ -424,13 +447,13 @@ async def process_tg_input(message: types.Message, state: FSMContext):
             if success:
                 cached_tg_ids["all"] = "ALL"
                 sent = await message.answer("✅ ALL добавлены.")
-                asyncio.create_task(delete_messages_later(message, sent, 600))
+                asyncio.create_task(delete_messages_later(message, sent, 300))
             await state.clear()
         else:
             await state.update_data(tg_id=tg_str)
             await state.set_state(AdminStates.waiting_for_name)
             sent = await message.answer("Укажите имя для этого TG ID (например, Иван Иванов):")
-            asyncio.create_task(delete_messages_later(message, sent, 600))
+            asyncio.create_task(delete_messages_later(message, sent, 300))
 
 @dp.message(AdminStates.waiting_for_name)
 async def process_tg_name(message: types.Message, state: FSMContext):
@@ -445,7 +468,7 @@ async def process_tg_name(message: types.Message, state: FSMContext):
     else:
         sent = await message.answer("❌ Ошибка сервера.")
         
-    asyncio.create_task(delete_messages_later(message, sent, 600))
+    asyncio.create_task(delete_messages_later(message, sent, 300))
     await state.clear()
 
 # ----------------- REGULAR USERS -----------------

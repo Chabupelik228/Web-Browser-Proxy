@@ -21,10 +21,11 @@ pub fn run() {
         let _ = std::fs::remove_dir_all(&path);
     }
 
-    dotenvy::from_path("../.env").expect("FATAL: .env file is missing in frontend/");
+    let _ = dotenvy::from_path("../.env");
+    let _ = dotenvy::from_path(".env");
     
-    let proxy_port = std::env::var("VITE_LOCAL_PROXY_PORT").expect("FATAL: VITE_LOCAL_PROXY_PORT is not set in .env");
-    let api_domain = std::env::var("VITE_API_DOMAIN").unwrap_or_else(|_| "localhost".to_string());
+    let proxy_port = option_env!("VITE_LOCAL_PROXY_PORT").unwrap_or("11338").to_string();
+    let api_domain = option_env!("VITE_API_DOMAIN").unwrap_or("").to_string();
     let proxy_args = format!(
         "--proxy-server=127.0.0.1:{} --proxy-bypass-list=127.0.0.1,localhost,tauri.localhost,ipc.localhost,{} --disable-features=AutofillServerCommunication,PasswordManager,UserAgentClientHint --disable-save-password-bubble --disable-single-click-autofill --enforce-webrtc-ip-permission-check --force-webrtc-ip-handling-policy=disable_non_proxied_udp --disable-quic --user-agent=\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36\" --disable-blink-features=AutomationControlled",
         proxy_port, api_domain
