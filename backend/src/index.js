@@ -20,13 +20,13 @@ const publicPath = fileURLToPath(new URL("../public/", import.meta.url));
 const activeWispSockets = new Map();
 
 // --- Multi-Domain Distribution ---
-const rootDomain = process.env.ROOT_DOMAIN || "chabupelik.su";
+const rootDomain = process.env.ROOT_DOMAIN;
 const WISP_DOMAINS = [
-	{ domain: `stream.${rootDomain}`, weight: 3 },  // тяжелый трафик
-	{ domain: `cdn.${rootDomain}`,    weight: 3 },  // тяжелый трафик
-	{ domain: `sync.${rootDomain}`,   weight: 2 },  // средний
-	{ domain: `sub.${rootDomain}`,    weight: 1 },  // легкий
-	{ domain: `telemetry.${rootDomain}`, weight: 1 }, // легкий
+	{ domain: `stream.${rootDomain}`, weight: 1 },
+	{ domain: `cdn.${rootDomain}`,    weight: 1 },
+	{ domain: `media.${rootDomain}`,  weight: 1 },
+	{ domain: `edge.${rootDomain}`,   weight: 1 },
+	{ domain: `assets.${rootDomain}`, weight: 1 },
 ];
 
 // userId -> { domain, sessionBytes, connectedAt }
@@ -568,6 +568,7 @@ fastify.post("/api/admin/command", async (req, reply) => {
 	}
 
 	const { user_id, command } = req.body || {};
+	console.log(`[ADMIN CMD RECV] user_id: ${user_id}, command: ${command}`);
 	if (!user_id || !command) {
 		return reply.code(400).send({ error: "user_id и command обязательны" });
 	}

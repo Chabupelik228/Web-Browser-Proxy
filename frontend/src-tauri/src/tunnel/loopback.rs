@@ -205,7 +205,7 @@ async fn handle_client_connection(
                 client_stream
                     .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                     .await?;
-                let mut direct_stream = TcpStream::connect((host.as_str(), port)).await?;
+                let mut direct_stream = connect_upstream(host.as_str(), port).await?;
                 if header_end > 0 && n > header_end {
                     direct_stream.write_all(&buf[header_end..n]).await?;
                 }
@@ -218,8 +218,8 @@ async fn handle_client_connection(
             let proxy_port = option_env!("VITE_LOCAL_PROXY_PORT").unwrap_or("11338").to_string();
             let api_domain = option_env!("VITE_API_DOMAIN").unwrap_or("").to_string();
             let pac_script = format!(
-                "function FindProxyForURL(url, host) {{ if (shExpMatch(host, '127.0.0.1') || shExpMatch(host, 'localhost') || shExpMatch(host, 'tauri.localhost') || shExpMatch(host, 'ipc.localhost') || shExpMatch(host, '{}')) return 'DIRECT'; return 'PROXY 127.0.0.1:{}'; }}",
-                api_domain, proxy_port
+                "function FindProxyForURL(url, host) {{ if (shExpMatch(host, '127.0.0.1') || shExpMatch(host, 'localhost') || shExpMatch(host, 'tauri.localhost') || shExpMatch(host, 'ipc.localhost')) return 'DIRECT'; return 'PROXY 127.0.0.1:{}'; }}",
+                proxy_port
             );
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/x-ns-proxy-autoconfig\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -261,7 +261,7 @@ async fn handle_client_connection(
                 }
             }
             ProxyMode::Transparent => {
-                let mut direct_stream = TcpStream::connect((host.as_str(), port)).await?;
+                let mut direct_stream = connect_upstream(host.as_str(), port).await?;
                 direct_stream.write_all(&buf[..n]).await?;
                 let _ = tokio::io::copy_bidirectional(&mut client_stream, &mut direct_stream).await;
             }
@@ -293,4 +293,40 @@ fn parse_http_target(target: &str, request_str: &str) -> (String, u16) {
         }
         parse_host_port(target, 80)
     }
+}
+
+async fn connect_upstream(host: &str, port: u16) -> std::io::Result<TcpStream> {
+    let upstream_proxy = option_env!("VITE_UPSTREAM_PROXY").unwrap_or("").to_string();
+    if !upstream_proxy.is_empty() {
+        if let Ok(proxy_url) = url::Url::parse(&upstream_proxy) {
+            if let Some(proxy_host) = proxy_url.host_str() {
+                let proxy_port = proxy_url.port_or_known_default().unwrap_or(3128);
+                let mut stream = TcpStream::connect((proxy_host, proxy_port)).await?;
+                
+                let connect_req = format!("CONNECT {}:{} HTTP/1.1\r\nHost: {}:{}\r\n\r\n", host, port, host, port);
+                use tokio::io::AsyncWriteExt;
+                stream.write_all(connect_req.as_bytes()).await?;
+                
+                let mut buf = [0u8; 4096];
+                let mut read_len = 0;
+                loop {
+                    use tokio::io::AsyncReadExt;
+                    let n = stream.read(&mut buf[read_len..]).await?;
+                    if n == 0 { 
+                        return Err(std::io::Error::new(std::io::ErrorKind::ConnectionAborted, "Proxy closed connection"));
+                    }
+                    read_len += n;
+                    if buf[..read_len].windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let response = String::from_utf8_lossy(&buf[..read_len]);
+                if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {
+                    return Err(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, format!("Proxy returned error: {}", response)));
+                }
+                return Ok(stream);
+            }
+        }
+    }
+    TcpStream::connect((host, port)).await
 }

@@ -13,7 +13,7 @@ if (!API_BASE) {
     throw new Error("Missing VITE_API_BASE in frontend .env");
 }
 
-const DOMAINS = ['stream', 'sync', 'cdn', 'sub', 'telemetry'];
+const DOMAINS = ['stream', 'cdn', 'media', 'edge', 'assets'];
 const getDynamicApiBase = () => {
     const randomSub = DOMAINS[Math.floor(Math.random() * DOMAINS.length)];
     const url = new URL(API_BASE);
@@ -62,7 +62,6 @@ export const useAuthStore = defineStore('auth', () => {
                             logout();
                         }
                     } catch (e) {
-                        alert('SSE parsing error: ' + e);
                         console.error('SSE parsing error:', e);
                     }
                 }
@@ -71,7 +70,6 @@ export const useAuthStore = defineStore('auth', () => {
                 // connection closed by server
             },
             onerror(err) {
-                alert('SSE Error: ' + err);
                 console.error('SSE Error:', err);
                 // Optionally retry or just throw to stop
             }
@@ -174,19 +172,15 @@ export const useAuthStore = defineStore('auth', () => {
     // Выход из сессии с зачисткой следов
     const logout = async () => {
         try {
-            await axios.post(`${getDynamicApiBase()}/api/auth/logout`);
+            await axios.post(`${getDynamicApiBase()}/api/auth/logout`, {}, { timeout: 3000 });
         } catch (e) {
-            alert('Logout API error: ' + e);
             console.error('Ошибка при выходе на сервере:', e);
         } finally {
             try {
-                alert('starting native_close_all_tabs');
                 await invoke('native_close_all_tabs');
-                alert('finished native_close_all_tabs, starting stop_tunnel');
                 await invoke('stop_tunnel');
-                alert('finished stop_tunnel');
             } catch (e) {
-                alert('Tauri invoke error during logout: ' + e);
+                console.error('Tauri invoke error during logout: ', e);
             }
 
             localStorage.removeItem('chabupelik_auth');
