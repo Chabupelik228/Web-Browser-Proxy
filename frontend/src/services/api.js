@@ -1,9 +1,11 @@
 import axios from 'axios';
 import { useAuthStore } from '../stores/auth.store';
+import { encryptPayload, decryptPayload } from './crypto';
 
 const api = axios.create({
   baseURL: '/', // Запросы пойдут на текущий домен (Nginx сам прокинет на бэк)
   withCredentials: true, // ВАЖНО: разрешает отправку HttpOnly куки с Refresh токеном
+  responseType: 'blob' // Для поддержки расшифровки бинарных данных, если ответ зашифрован. Мы перехватим и распарсим.
 });
 
 let isRefreshing = false;
@@ -17,9 +19,44 @@ const processQueue = (error, token = null) => {
   failedQueue = [];
 };
 
+// Перехватчик Запросов (Шифрование)
+api.interceptors.request.use(async (config) => {
+  if (['post', 'put', 'patch'].includes(config.method) && config.data && typeof config.data === 'object') {
+    try {
+      const encryptedData = await encryptPayload(config.data);
+      config.data = encryptedData;
+      config.headers['X-Encrypted-Payload'] = '1';
+      config.headers['Content-Type'] = 'application/octet-stream';
+    } catch (e) {
+      console.error('Ошибка шифрования payload:', e);
+    }
+  }
+  return config;
+});
+
 // Перехватчик Ответов
 api.interceptors.response.use(
-  (response) => response,
+  async (response) => {
+    if (response.data instanceof Blob) {
+      if (response.headers['x-encrypted-payload'] === '1') {
+        try {
+          const buffer = await response.data.arrayBuffer();
+          response.data = await decryptPayload(buffer);
+        } catch (e) {
+          console.error('Ошибка расшифровки payload:', e);
+        }
+      } else if (response.data.type.includes('json') || response.data.size > 0) {
+        try {
+          const text = await response.data.text();
+          response.data = JSON.parse(text);
+        } catch (e) {
+          // If it's not JSON, maybe leave it as text
+          try { response.data = await response.data.text(); } catch(err){}
+        }
+      }
+    }
+    return response;
+  },
   async (error) => {
     const originalRequest = error.config;
 

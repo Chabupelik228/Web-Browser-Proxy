@@ -13,6 +13,9 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 use url::Url;
 use sha2::{Sha256, Digest};
 use std::time::{SystemTime, UNIX_EPOCH};
+use aes_gcm::{Aes256Gcm, Key, Nonce};
+use aes_gcm::aead::{Aead, KeyInit};
+use rand::Rng;
 pub const WISP_TYPE_CONNECT: u8 = 0x01;
 pub const WISP_TYPE_DATA: u8 = 0x02;
 pub const WISP_TYPE_CONTINUE: u8 = 0x03;
@@ -41,9 +44,38 @@ impl WispClient {
         let port = parsed_url.port_or_known_default().unwrap_or(443);
 
         // Проверяем наличие апстрим-прокси
-        let tcp_stream = TcpStream::connect((host.as_str(), port))
-            .await
-            .map_err(|e| format!("Не удалось подключиться к WISP хосту напрямую {}:{}: {}", host, port, e))?;
+        let upstream_proxy = std::env::var("VITE_UPSTREAM_PROXY").unwrap_or_default();
+        let mut tcp_stream = if !upstream_proxy.is_empty() {
+            let proxy_url = Url::parse(&upstream_proxy).map_err(|e| format!("Некорректный VITE_UPSTREAM_PROXY: {}", e))?;
+            let proxy_host = proxy_url.host_str().ok_or("Отсутствует хост в прокси")?;
+            let proxy_port = proxy_url.port_or_known_default().unwrap_or(3128);
+            
+            let mut stream = TcpStream::connect((proxy_host, proxy_port)).await
+                .map_err(|e| format!("Не удалось подключиться к прокси {}:{}: {}", proxy_host, proxy_port, e))?;
+                
+            let connect_req = format!("CONNECT {}:{} HTTP/1.1\r\nHost: {}:{}\r\n\r\n", host, port, host, port);
+            stream.write_all(connect_req.as_bytes()).await.map_err(|e| format!("Ошибка отправки CONNECT: {}", e))?;
+            
+            let mut buf = [0u8; 4096];
+            let mut read_len = 0;
+            loop {
+                let n = stream.read(&mut buf[read_len..]).await.map_err(|e| format!("Ошибка чтения ответа прокси: {}", e))?;
+                if n == 0 { return Err("Прокси закрыл соединение до ответа".to_string()); }
+                read_len += n;
+                if buf[..read_len].windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let response = String::from_utf8_lossy(&buf[..read_len]);
+            if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {
+                return Err(format!("Прокси вернул ошибку: {}", response));
+            }
+            stream
+        } else {
+            TcpStream::connect((host.as_str(), port))
+                .await
+                .map_err(|e| format!("Не удалось подключиться к WISP хосту напрямую {}:{}: {}", host, port, e))?
+        };
 
         let token = parsed_url.path().trim_start_matches("/wisp/");
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs().to_string();
@@ -66,12 +98,28 @@ impl WispClient {
             .body(())
             .map_err(|e| format!("Ошибка формирования WebSocket запроса: {}", e))?;
 
-        let (ws_stream, _) = client_async_tls(request, tcp_stream)
-            .await
-            .map_err(|e| format!("Не удалось выполнить WebSocket handshake: {}", e))?;
+        // Создаем TLS коннектор, который игнорирует ошибки сертификатов (нужно для обхода SSL-Bumping прокси ЕСПД)
+        let mut builder = native_tls::TlsConnector::builder();
+        builder.danger_accept_invalid_certs(true);
+        builder.danger_accept_invalid_hostnames(true);
+        let connector = builder.build().map_err(|e| format!("Ошибка создания TLS коннектора: {}", e))?;
+
+        let (ws_stream, _) = tokio_tungstenite::client_async_tls_with_config(
+            request, 
+            tcp_stream, 
+            None,
+            Some(tokio_tungstenite::Connector::NativeTls(connector))
+        )
+        .await
+        .map_err(|e| format!("Не удалось выполнить WebSocket handshake: {}", e))?;
 
         let (mut ws_sink, mut ws_source) = ws_stream.split();
         let (tx, mut rx) = mpsc::channel::<Message>(1000);
+
+        let mut key_hasher = Sha256::new();
+        key_hasher.update(salt.as_bytes());
+        let key_bytes: [u8; 32] = key_hasher.finalize().into();
+        let aes_key = Key::<Aes256Gcm>::from_slice(&key_bytes).clone();
 
         let stream_channels = Arc::new(Mutex::new(HashMap::<u32, mpsc::Sender<Vec<u8>>>::new()));
         let stream_channels_rx = stream_channels.clone();
@@ -80,9 +128,31 @@ impl WispClient {
         let alive_tx = alive.clone();
         let alive_rx = alive.clone();
 
+        let cipher_tx = Aes256Gcm::new(&aes_key);
         // Sender task: пересылает сообщения из канала в WebSocket
         tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
+                let msg = match msg {
+                    Message::Binary(data) => {
+                        let mut nonce_bytes = [0u8; 12];
+                        rand::thread_rng().fill(&mut nonce_bytes);
+                        let nonce = Nonce::from_slice(&nonce_bytes);
+                        match cipher_tx.encrypt(nonce, data.as_ref()) {
+                            Ok(ciphertext) => {
+                                let mut final_payload = Vec::with_capacity(12 + ciphertext.len());
+                                final_payload.extend_from_slice(&nonce_bytes);
+                                final_payload.extend_from_slice(&ciphertext);
+                                Message::Binary(final_payload.into())
+                            },
+                            Err(e) => {
+                                log::error!("[WISP] Ошибка шифрования: {:?}", e);
+                                continue;
+                            }
+                        }
+                    },
+                    other => other,
+                };
+
                 if ws_sink.send(msg).await.is_err() {
                     break;
                 }
@@ -91,10 +161,25 @@ impl WispClient {
             log::warn!("[WISP] WebSocket sender task завершилась — соединение разорвано");
         });
 
+        let cipher_rx = Aes256Gcm::new(&aes_key);
         // Receiver task: читает из WebSocket и раздаёт по stream-каналам
         tokio::spawn(async move {
             while let Some(Ok(msg)) = ws_source.next().await {
-                if let Message::Binary(data) = msg {
+                if let Message::Binary(mut data) = msg {
+                    if data.len() < 28 { // 12 (IV) + 16 (AuthTag)
+                        continue;
+                    }
+                    let nonce = Nonce::from_slice(&data[0..12]);
+                    match cipher_rx.decrypt(nonce, &data[12..]) {
+                        Ok(plaintext) => {
+                            data = plaintext.into();
+                        },
+                        Err(e) => {
+                            log::error!("[WISP] Ошибка расшифровки: {:?}", e);
+                            continue;
+                        }
+                    }
+
                     if data.len() < 5 {
                         continue;
                     }

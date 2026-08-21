@@ -12,6 +12,7 @@ import { createClient } from "redis";
 import jwt from "jsonwebtoken";
 import crypto from "node:crypto";
 import ipRangeCheck from "ip-range-check";
+import { WebSocketServer, WebSocket } from "ws";
 
 const publicPath = fileURLToPath(new URL("../public/", import.meta.url));
 
@@ -76,13 +77,20 @@ function isIpAllowed(clientIp) {
 	return ipRangeCheck(clientIp, allowedIps);
 }
 
-// Настройки Wisp-проксирования
+// Настройка Wisp-сервера
 logging.set_level(logging.NONE);
 Object.assign(wisp.options, {
 	allow_udp_streams: false,
 	hostname_blacklist: [/example\.com/],
-	// Remote DNS: строго внешние DNS, чтобы шлюз колледжа (10.0.16.32) не видел запросов
 	dns_servers: ["1.1.1.1", "8.8.8.8", "94.140.14.14", "94.140.15.15"],
+});
+
+const internalWispServer = createServer();
+internalWispServer.on("upgrade", (req, socket, head) => {
+	wisp.routeRequest(req, socket, head);
+});
+internalWispServer.listen(11339, '127.0.0.1', () => {
+	console.log("[INTERNAL] Internal Wisp Server listening on 127.0.0.1:11339");
 });
 
 const fastify = Fastify({
@@ -242,8 +250,74 @@ const fastify = Fastify({
 
 					try {
 						console.log(`[WISP GATEWAY] Wisp-туннель активен для user_id: ${userId} (${deviceHash})`);
-						req.url = "/";
-						wisp.routeRequest(req, socket, head);
+						
+						const wss = new WebSocketServer({ noServer: true });
+						wss.handleUpgrade(req, socket, head, (clientWs) => {
+							const aesKey = crypto.createHash('sha256').update(process.env.WISP_SALT).digest();
+							
+							const internalWs = new WebSocket("ws://127.0.0.1:11339/");
+							const messageBuffer = [];
+							
+							const pingInterval = setInterval(() => {
+								if (clientWs.readyState === WebSocket.OPEN) {
+									clientWs.ping();
+								}
+							}, 30000);
+
+							clientWs.on("message", (data) => {
+								if (!Buffer.isBuffer(data) || data.length < 28) return;
+								try {
+									const iv = data.subarray(0, 12);
+									const authTag = data.subarray(data.length - 16);
+									const ciphertext = data.subarray(12, data.length - 16);
+									
+									const decipher = crypto.createDecipheriv('aes-256-gcm', aesKey, iv);
+									decipher.setAuthTag(authTag);
+									let plaintext = decipher.update(ciphertext);
+									plaintext = Buffer.concat([plaintext, decipher.final()]);
+									
+									if (internalWs.readyState === WebSocket.OPEN) {
+										internalWs.send(plaintext);
+									} else if (internalWs.readyState === WebSocket.CONNECTING) {
+										messageBuffer.push(plaintext);
+									}
+								} catch (err) {
+									console.error("[WISP DECRYPT ERROR]", err.message);
+								}
+							});
+
+							internalWs.on("open", () => {
+								messageBuffer.forEach(msg => internalWs.send(msg));
+								messageBuffer.length = 0;
+							});
+							
+							internalWs.on("message", (data) => {
+								if (!Buffer.isBuffer(data)) return;
+								try {
+									const iv = crypto.randomBytes(12);
+									const cipher = crypto.createCipheriv('aes-256-gcm', aesKey, iv);
+									let ciphertext = cipher.update(data);
+									ciphertext = Buffer.concat([ciphertext, cipher.final()]);
+									const authTag = cipher.getAuthTag();
+									
+									const payload = Buffer.concat([iv, ciphertext, authTag]);
+									
+									if (clientWs.readyState === WebSocket.OPEN) {
+										clientWs.send(payload);
+									}
+								} catch (err) {
+									console.error("[WISP ENCRYPT ERROR]", err.message);
+								}
+							});
+							
+							clientWs.on("close", () => {
+								clearInterval(pingInterval);
+								internalWs.close();
+							});
+							internalWs.on("close", () => clientWs.close());
+							clientWs.on("error", () => internalWs.close());
+							internalWs.on("error", () => clientWs.close());
+						});
 					} catch (e) {
 						console.error("[WISP ROUTE ERROR]", e);
 						try { socket.destroy(); } catch (_) { }
@@ -253,6 +327,64 @@ const fastify = Fastify({
 				socket.end();
 			});
 	},
+});
+
+
+
+// Middleware для E2EE шифрования API
+fastify.addHook('preHandler', async (req, reply) => {
+	if (req.headers['x-encrypted-payload'] === '1' && req.body) {
+		try {
+			const aesKey = crypto.createHash('sha256').update(process.env.WISP_SALT).digest();
+			let data = req.body;
+			if (typeof data === 'string') data = Buffer.from(data, 'utf-8');
+			
+			if (Buffer.isBuffer(data)) {
+				const iv = data.subarray(0, 12);
+				const authTag = data.subarray(data.length - 16);
+				const ciphertext = data.subarray(12, data.length - 16);
+
+				const decipher = crypto.createDecipheriv('aes-256-gcm', aesKey, iv);
+				decipher.setAuthTag(authTag);
+				let plaintext = decipher.update(ciphertext);
+				plaintext = Buffer.concat([plaintext, decipher.final()]);
+
+				req.body = JSON.parse(plaintext.toString('utf-8'));
+				req.raw.encryptedResponseRequested = true;
+			}
+		} catch (err) {
+			console.error("[API DECRYPT ERROR]", err);
+			return reply.code(400).send({ error: "Failed to decrypt payload" });
+		}
+	}
+});
+
+fastify.addHook('onSend', async (req, reply, payload) => {
+	if (req.raw.encryptedResponseRequested && payload) {
+		try {
+			const aesKey = crypto.createHash('sha256').update(process.env.WISP_SALT).digest();
+			const iv = crypto.randomBytes(12);
+			const cipher = crypto.createCipheriv('aes-256-gcm', aesKey, iv);
+			
+			const dataToEncrypt = typeof payload === 'string' ? payload : JSON.stringify(payload);
+			let ciphertext = cipher.update(Buffer.from(dataToEncrypt, 'utf-8'));
+			ciphertext = Buffer.concat([ciphertext, cipher.final()]);
+			const authTag = cipher.getAuthTag();
+
+			const encryptedPayload = Buffer.concat([iv, ciphertext, authTag]);
+			reply.header('x-encrypted-payload', '1');
+			reply.header('content-type', 'application/octet-stream');
+			return encryptedPayload;
+		} catch (err) {
+			console.error("[API ENCRYPT ERROR]", err);
+		}
+	}
+	return payload;
+});
+
+// Добавляем поддержку raw body для application/octet-stream
+fastify.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (req, body, done) => {
+	done(null, body);
 });
 
 fastify.register(fastifyCors, {

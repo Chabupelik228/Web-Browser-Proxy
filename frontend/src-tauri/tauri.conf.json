@@ -5,7 +5,7 @@
   "identifier": "com.google.chrome",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://127.0.0.1:1420",
+    "devUrl": "http://127.0.0.1:1493",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
   },
