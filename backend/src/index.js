@@ -19,6 +19,34 @@ const publicPath = fileURLToPath(new URL("../public/", import.meta.url));
 // Хранилище активных Wisp сокетов: userId -> Set(socket)
 const activeWispSockets = new Map();
 
+// --- Multi-Domain Distribution ---
+const rootDomain = process.env.ROOT_DOMAIN || "chabupelik.su";
+const WISP_DOMAINS = [
+	{ domain: `stream.${rootDomain}`, weight: 3 },  // тяжелый трафик
+	{ domain: `cdn.${rootDomain}`,    weight: 3 },  // тяжелый трафик
+	{ domain: `sync.${rootDomain}`,   weight: 2 },  // средний
+	{ domain: `sub.${rootDomain}`,    weight: 1 },  // легкий
+	{ domain: `telemetry.${rootDomain}`, weight: 1 }, // легкий
+];
+
+// userId -> { domain, sessionBytes, connectedAt }
+const activeUserDomains = new Map();
+// In-memory traffic counters: userId -> { session: number, delta: number }
+const trafficCounters = new Map();
+
+// Flush traffic deltas to Redis every 5 seconds
+setInterval(async () => {
+	for (const [userId, counter] of trafficCounters.entries()) {
+		if (counter.delta > 0) {
+			const delta = counter.delta;
+			counter.delta = 0;
+			try {
+				await redis.incrBy(`traffic:${userId}:total`, delta);
+			} catch (_) {}
+		}
+	}
+}, 5000);
+
 // Инициализация БД и Redis
 const { Pool } = pg;
 const db = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -100,10 +128,10 @@ const fastify = Fastify({
 				const url = req.url || "";
 				const isApiOrStatic = (
 					url.startsWith("/api/") ||
-					url.startsWith("/scram/") ||
-					url.startsWith("/libcurl/") ||
-					url.startsWith("/baremux/") ||
-					url.startsWith("/wisp/")
+					url.startsWith("/v1/bundle/") ||
+					url.startsWith("/v1/transport/") ||
+					url.startsWith("/v1/mux/") ||
+					url.startsWith("/v1/live/")
 				);
 
 				if (!isApiOrStatic) {
@@ -143,9 +171,9 @@ const fastify = Fastify({
 					return;
 				}
 
-				if (req.url.startsWith("/wisp/")) {
-					const segments = req.url.split("/").filter(Boolean);
-					const token = segments[1] ? decodeURIComponent(segments[1]) : null;
+				const liveMatch = req.url.match(/\/v1\/live\/([^/?]+)/);
+				if (liveMatch) {
+					const token = decodeURIComponent(liveMatch[1]);
 
 					if (!token) {
 						socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
@@ -257,6 +285,13 @@ const fastify = Fastify({
 							
 							const internalWs = new WebSocket("ws://127.0.0.1:11339/");
 							const messageBuffer = [];
+
+							// Init in-memory traffic counter for this user
+							if (!trafficCounters.has(userId)) {
+								trafficCounters.set(userId, { session: 0, delta: 0 });
+							} else {
+								trafficCounters.get(userId).session = 0;
+							}
 							
 							const pingInterval = setInterval(() => {
 								if (clientWs.readyState === WebSocket.OPEN) {
@@ -284,6 +319,9 @@ const fastify = Fastify({
 								} catch (err) {
 									console.error("[WISP DECRYPT ERROR]", err.message);
 								}
+								// Count incoming traffic (from client)
+								const tc = trafficCounters.get(userId);
+								if (tc) { tc.session += data.length; tc.delta += data.length; }
 							});
 
 							internalWs.on("open", () => {
@@ -308,11 +346,22 @@ const fastify = Fastify({
 								} catch (err) {
 									console.error("[WISP ENCRYPT ERROR]", err.message);
 								}
+								// Count outgoing traffic (to client)
+								const tc2 = trafficCounters.get(userId);
+								if (tc2) { tc2.session += data.length; tc2.delta += data.length; }
 							});
 							
 							clientWs.on("close", () => {
 								clearInterval(pingInterval);
 								internalWs.close();
+								// Flush remaining traffic delta to Redis
+								const tc3 = trafficCounters.get(userId);
+								if (tc3 && tc3.delta > 0) {
+									redis.incrBy(`traffic:${userId}:total`, tc3.delta).catch(() => {});
+									tc3.delta = 0;
+								}
+								// Clean up activeUserDomains
+								activeUserDomains.delete(userId);
 							});
 							internalWs.on("close", () => clientWs.close());
 							clientWs.on("error", () => internalWs.close());
@@ -416,6 +465,54 @@ process.on("uncaughtException", (err) => {
 process.on("unhandledRejection", (reason) => {
 	console.error("[BACKEND CRITICAL] Unhandled rejection:", reason);
 });
+
+// ----------------------------------------------------
+// 0. НАЗНАЧЕНИЕ ПОДДОМЕНА ДЛЯ WISP-ТУННЕЛЯ
+// ----------------------------------------------------
+fastify.post("/api/tunnel/assign", async (req, reply) => {
+	await checkAuth(req, reply);
+	if (reply.sent) return;
+
+	const userId = req.user.id;
+
+	// Already assigned? Return existing
+	const existing = activeUserDomains.get(userId);
+	if (existing) {
+		return { status: "ok", domain: existing.domain };
+	}
+
+	// Count active users per domain
+	const domainCounts = {};
+	for (const d of WISP_DOMAINS) domainCounts[d.domain] = 0;
+	for (const [, info] of activeUserDomains) {
+		if (domainCounts[info.domain] !== undefined) domainCounts[info.domain]++;
+	}
+
+	// Pick domains with the lowest score, then pick randomly among them
+	let bestDomains = [];
+	let bestScore = Infinity;
+	for (const d of WISP_DOMAINS) {
+		const score = domainCounts[d.domain] / d.weight;
+		if (score < bestScore) {
+			bestScore = score;
+			bestDomains = [d.domain];
+		} else if (score === bestScore) {
+			bestDomains.push(d.domain);
+		}
+	}
+	const bestDomain = bestDomains[Math.floor(Math.random() * bestDomains.length)];
+
+	activeUserDomains.set(userId, {
+		domain: bestDomain,
+		sessionBytes: 0,
+		connectedAt: Date.now(),
+	});
+
+	console.log(`[DOMAIN ASSIGN] User ${userId} -> ${bestDomain}`);
+	return { status: "ok", domain: bestDomain };
+});
+
+
 
 // ----------------------------------------------------
 // 1. РЕГИСТРАЦИЯ ПОЛЬЗОВАТЕЛЯ (через Telegram-бота)
@@ -678,6 +775,41 @@ const verifyBotToken = (req, reply, done) => {
 	}
 	done();
 };
+
+// Статистика трафика пользователей (для TG бота)
+fastify.get("/api/admin/traffic", { preHandler: verifyBotToken }, async (req, reply) => {
+	try {
+		const result = await db.query("SELECT id, username, is_active, telegram_id FROM users ORDER BY id ASC");
+		const users = [];
+
+		for (const u of result.rows) {
+			const totalRaw = await redis.get(`traffic:${u.id}:total`).catch(() => null);
+			const totalBytes = parseInt(totalRaw || "0", 10);
+
+			const tc = trafficCounters.get(u.id);
+			const sessionBytes = tc ? tc.session : 0;
+
+			const domainInfo = activeUserDomains.get(u.id);
+			const isConnected = activeWispSockets.has(u.id) && activeWispSockets.get(u.id).size > 0;
+
+			users.push({
+				id: u.id,
+				username: u.username,
+				telegram_id: u.telegram_id,
+				is_active: u.is_active,
+				connected: isConnected,
+				domain: domainInfo ? domainInfo.domain : null,
+				sessionBytes,
+				totalBytes,
+			});
+		}
+
+		return { status: "ok", users };
+	} catch (e) {
+		console.error("[ADMIN TRAFFIC ERROR]", e);
+		return reply.code(500).send({ error: "Error fetching traffic" });
+	}
+});
 
 fastify.get("/api/admin/whitelists", { preHandler: verifyBotToken }, async (req, reply) => {
 	const tgArray = Array.from(allowedTgIds.entries()).map(([id, name]) => ({ id, name }));

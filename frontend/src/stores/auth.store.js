@@ -6,11 +6,18 @@ import { invoke } from '@tauri-apps/api/core';
 import { useBrowserStore } from './browser.store';
 
 const API_BASE = import.meta.env.VITE_API_BASE;
-const WISP_URL = import.meta.env.VITE_WISP_URL;
 
-if (!API_BASE || !WISP_URL) {
-    throw new Error("Missing VITE_API_BASE or VITE_WISP_URL in frontend .env");
+if (!API_BASE) {
+    throw new Error("Missing VITE_API_BASE in frontend .env");
 }
+
+const DOMAINS = ['stream', 'sync', 'cdn', 'sub', 'telemetry'];
+const getDynamicApiBase = () => {
+    const randomSub = DOMAINS[Math.floor(Math.random() * DOMAINS.length)];
+    const url = new URL(API_BASE);
+    url.hostname = `${randomSub}.${url.hostname}`;
+    return url.toString().replace(/\/$/, '');
+};
 
 export const useAuthStore = defineStore('auth', () => {
     const user = ref(null);
@@ -39,7 +46,7 @@ export const useAuthStore = defineStore('auth', () => {
         try {
             transitionPhase.value = 'authenticating';
             await initDeviceId();
-            const { data } = await axios.post(`${API_BASE}/api/auth/otp/verify`, {
+            const { data } = await axios.post(`${getDynamicApiBase()}/api/auth/otp/verify`, {
                 code,
                 device_id: deviceId.value,
             });
@@ -57,7 +64,23 @@ export const useAuthStore = defineStore('auth', () => {
             }));
 
             transitionPhase.value = 'connecting';
-            await startProxyTunnel(token);
+
+            // Request domain assignment from backend
+            let assignedDomain;
+            try {
+                const assignResp = await axios.post(`${getDynamicApiBase()}/api/tunnel/assign`, {}, {
+                    headers: { Authorization: `Bearer ${token}` },
+                });
+                assignedDomain = assignResp.data.domain;
+            } catch (e) {
+                console.error('Ошибка получения поддомена:', e);
+                // Fallback to stream domain instead of main domain
+                const url = new URL(API_BASE);
+                assignedDomain = `stream.${url.hostname}`;
+            }
+
+            const wispUrl = `wss://${assignedDomain}/v1/live/`;
+            await startProxyTunnel(token, wispUrl);
 
             transitionPhase.value = 'morphing';
             setTimeout(() => {
@@ -73,10 +96,10 @@ export const useAuthStore = defineStore('auth', () => {
     };
 
     // Запуск прокси-туннеля через Rust Core
-    const startProxyTunnel = async (token) => {
+    const startProxyTunnel = async (token, wispUrl) => {
         try {
             const info = await invoke('start_tunnel', {
-                wispUrl: WISP_URL,
+                wispUrl: wispUrl,
                 token: token,
             });
             proxyInfo.value = info;

@@ -17,7 +17,6 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_BASE = os.getenv("API_URL", "http://localhost:8080").replace("/api/auth/register", "").rstrip("/")
 API_SECRET = os.getenv("API_SECRET")
-DOMAIN = os.getenv("DOMAIN")
 ADMIN_ID = str(os.getenv("ADMIN_ID"))
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
@@ -175,6 +174,28 @@ async def api_manage_users(action, user_id=None, name=None):
         return [] if action == "list" else False
     return [] if action == "list" else False
 
+async def api_fetch_traffic():
+    headers = {"x-bot-token": API_SECRET}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{API_BASE}/api/admin/traffic", headers=headers, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return {str(u["id"]): u for u in data.get("users", [])}
+    except Exception as e:
+        print("API error traffic:", e)
+    return {}
+
+def format_bytes(b):
+    if b < 1024:
+        return f"{b} B"
+    elif b < 1024 * 1024:
+        return f"{b / 1024:.1f} KB"
+    elif b < 1024 * 1024 * 1024:
+        return f"{b / (1024*1024):.1f} MB"
+    else:
+        return f"{b / (1024*1024*1024):.2f} GB"
+
 async def render_dbusers_page(message: types.Message, page: int):
     users = await api_manage_users("list")
     per_page = 8
@@ -216,10 +237,37 @@ async def handle_dbusers_callbacks(call: CallbackQuery, state: FSMContext):
         u = next((x for x in users if str(x['id']) == val), None)
         if not u:
             return await call.answer("Пользователь не найден", show_alert=True)
-            
-        text = f"👤 *Профиль пользователя*\n\n*ID в базе:* `{u['id']}`\n*TG ID:* `{u.get('telegram_id', 'Не привязан')}`\n*Имя/Логин:* {u['username']}"
+        
+        # Fetch traffic data
+        traffic_data = await api_fetch_traffic()
+        t = traffic_data.get(val, {})
+        
+        connected = t.get("connected", False)
+        domain = t.get("domain", None)
+        session_bytes = t.get("sessionBytes", 0)
+        total_bytes = t.get("totalBytes", 0)
+        
+        status_emoji = "🟢" if connected else "🔴"
+        status_text = "Онлайн" if connected else "Офлайн"
+        
+        text = (
+            f"👤 *Профиль пользователя*\n\n"
+            f"*ID в базе:* `{u['id']}`\n"
+            f"*TG ID:* `{u.get('telegram_id', 'Не привязан')}`\n"
+            f"*Имя/Логин:* {u['username']}\n\n"
+            f"{status_emoji} *Статус:* {status_text}\n"
+        )
+        
+        if connected and domain:
+            text += f"🌐 *Поддомен:* `{domain}`\n"
+        
+        text += (
+            f"📥 *Трафик (сессия):* {format_bytes(session_bytes)}\n"
+            f"📊 *Трафик (всего):* {format_bytes(total_bytes)}"
+        )
+        
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✏️ Изменить Имя", callback_data=f"u_edit:{u['id']}")],
+            [InlineKeyboardButton(text="✒️ Изменить Имя", callback_data=f"u_edit:{u['id']}")],
             [InlineKeyboardButton(text="❌ Удалить", callback_data=f"u_del:{u['id']}")],
             [InlineKeyboardButton(text="🔙 К списку", callback_data="admin_dbusers")]
         ])

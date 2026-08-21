@@ -79,6 +79,9 @@ impl TunnelManager {
             server.set_mode(ProxyMode::Transparent);
             // Затем очищаем WISP-клиент
             let mut wisp_guard = server.wisp_client.lock();
+            if let Some(client) = wisp_guard.as_ref() {
+                client.close();
+            }
             *wisp_guard = None;
         }
     }

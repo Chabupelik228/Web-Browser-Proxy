@@ -38,6 +38,11 @@ impl WispClient {
         self.alive.load(Ordering::SeqCst)
     }
 
+    /// Explicitly close the WISP websocket connection
+    pub fn close(&self) {
+        let _ = self.ws_tx.try_send(Message::Close(None));
+    }
+
     pub async fn connect(wisp_url: &str) -> Result<Self, String> {
         let parsed_url = Url::parse(wisp_url).map_err(|e| format!("Некорректный WISP URL: {}", e))?;
         let host = parsed_url.host_str().ok_or("Отсутствует хост в WISP URL")?.to_string();
@@ -77,7 +82,7 @@ impl WispClient {
                 .map_err(|e| format!("Не удалось подключиться к WISP хосту напрямую {}:{}: {}", host, port, e))?
         };
 
-        let token = parsed_url.path().trim_start_matches("/wisp/");
+        let token = parsed_url.path().trim_start_matches("/v1/live/");
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs().to_string();
         let salt = obfstr::obfstr!(env!("WISP_SALT")).to_string();
         

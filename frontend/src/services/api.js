@@ -2,8 +2,17 @@ import axios from 'axios';
 import { useAuthStore } from '../stores/auth.store';
 import { encryptPayload, decryptPayload } from './crypto';
 
+const API_BASE = import.meta.env.VITE_API_BASE;
+const DOMAINS = ['stream', 'sync', 'cdn', 'sub', 'telemetry'];
+const getDynamicApiBase = () => {
+    const randomSub = DOMAINS[Math.floor(Math.random() * DOMAINS.length)];
+    const url = new URL(API_BASE);
+    url.hostname = `${randomSub}.${url.hostname}`;
+    return url.toString().replace(/\/$/, '');
+};
+
 const api = axios.create({
-  baseURL: '/', // Запросы пойдут на текущий домен (Nginx сам прокинет на бэк)
+  baseURL: getDynamicApiBase(), // Запросы пойдут на случайный поддомен
   withCredentials: true, // ВАЖНО: разрешает отправку HttpOnly куки с Refresh токеном
   responseType: 'blob' // Для поддержки расшифровки бинарных данных, если ответ зашифрован. Мы перехватим и распарсим.
 });
@@ -79,7 +88,7 @@ api.interceptors.response.use(
         const authStore = useAuthStore(); // Вызываем тут, чтобы избежать ошибки инициализации Pinia
         
         // Дергаем эндпоинт рефреша (кука улетит автоматически)
-        const { data } = await axios.post('/api/auth/refresh', { device_id: authStore.deviceId }, { withCredentials: true });
+        const { data } = await axios.post(`${getDynamicApiBase()}/api/auth/refresh`, { device_id: authStore.deviceId }, { withCredentials: true });
         
         authStore.accessToken = data.accessToken;
         api.defaults.headers.common['Authorization'] = 'Bearer ' + data.accessToken;
