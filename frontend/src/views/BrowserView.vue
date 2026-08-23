@@ -248,6 +248,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAuthStore } from '../stores/auth.store';
 import { useBrowserStore } from '../stores/browser.store';
+import api from '../services/api';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { PhysicalPosition } from '@tauri-apps/api/dpi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -417,7 +418,15 @@ const handleMainWindowMousedown = (e) => {
   }
 };
 
-onMounted(() => {
+onMounted(async () => {
+  try {
+    if (!authStore.deviceId) {
+      await authStore.initDeviceId();
+    }
+  } catch (err) {
+    console.error("Failed to init device ID in BrowserView:", err);
+  }
+
   if (tabsContainer.value) {
     tabResizeObserver = new ResizeObserver(() => checkScrollArrows());
     tabResizeObserver.observe(tabsContainer.value);

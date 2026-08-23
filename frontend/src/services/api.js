@@ -3,7 +3,7 @@ import { useAuthStore } from '../stores/auth.store';
 import { encryptPayload, decryptPayload } from './crypto';
 
 const API_BASE = import.meta.env.VITE_API_BASE;
-const DOMAINS = ['stream', 'sync', 'cdn', 'sub', 'telemetry'];
+const DOMAINS = ['stream', 'cdn', 'media', 'edge', 'assets'];
 const getDynamicApiBase = () => {
     const randomSub = DOMAINS[Math.floor(Math.random() * DOMAINS.length)];
     const url = new URL(API_BASE);

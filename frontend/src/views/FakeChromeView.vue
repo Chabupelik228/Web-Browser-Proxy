@@ -183,6 +183,7 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAuthStore } from '../stores/auth.store';
+import api from '../services/api';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { PhysicalPosition } from '@tauri-apps/api/dpi';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -518,6 +519,21 @@ const handleMainWindowMousedown = (e) => {
 };
 
 onMounted(async () => {
+  try {
+    if (!authStore.deviceId) {
+      await authStore.initDeviceId();
+    }
+    const deviceId = authStore.deviceId || 'unknown';
+    await api.post('/api/device/event', {
+      device_id: deviceId,
+      event_type: 'open',
+      browser_type: 'normal'
+    });
+  } catch (err) {
+    alert('Failed to log FakeChrome open: ' + err.message + ' ' + JSON.stringify(err.response?.data || {}));
+    console.error('Failed to log device event:', err);
+  }
+
   resizeObserver = new ResizeObserver((entries) => {
     for (let entry of entries) {
       if (entry.target === headerWrapper.value) {

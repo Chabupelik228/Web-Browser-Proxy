@@ -38,4 +38,45 @@ const urlParams = new URLSearchParams(window.location.search);
 const widgetName = urlParams.get('widget');
 const isWidget = !!widgetName;
 
+import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import api from './services/api';
+
+let unlistenClose = null;
+
+onMounted(async () => {
+  if (!isWidget) {
+    const appWindow = getCurrentWindow();
+    unlistenClose = await appWindow.onCloseRequested(async (event) => {
+      // Prevent immediate close to allow network request to finish
+      event.preventDefault();
+      
+      try {
+        if (!authStore.deviceId) {
+          await authStore.initDeviceId();
+        }
+        const deviceId = authStore.deviceId || 'unknown';
+        const browserType = authStore.isProxyReady ? 'hidden' : 'normal';
+        
+        // Await the actual POST request for reliable delivery
+        await api.post('/api/device/event', {
+          device_id: deviceId,
+          event_type: 'close',
+          browser_type: browserType
+        });
+        
+        await invoke('force_exit');
+      } catch (err) {
+        console.error("Failed to log FakeChrome close:", err);
+        await invoke('force_exit');
+      }
+    });
+  }
+});
+
+onUnmounted(() => {
+  if (unlistenClose) {
+    unlistenClose();
+  }
+});
 </script>

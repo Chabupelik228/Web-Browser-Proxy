@@ -11,6 +11,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQu
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.exceptions import TelegramBadRequest
 
 load_dotenv()
 
@@ -69,10 +70,12 @@ class AdminStates(StatesGroup):
     waiting_for_tg_id = State()
     waiting_for_name = State()
     waiting_for_user_new_name = State()
+    waiting_for_devlogs_user = State()
 
 def get_admin_keyboard():
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🧑‍💻 Зарегистрированные юзеры", callback_data="admin_dbusers")],
+        [InlineKeyboardButton(text="📜 Логи устройств", callback_data="admin_devlogs")],
         [InlineKeyboardButton(text="🌐 Управление IP", callback_data="admin_ip")],
         [InlineKeyboardButton(text="👥 Управление TG ID", callback_data="admin_tg")],
         [InlineKeyboardButton(text="🔄 Обновить кэш с сервера", callback_data="admin_refresh")]
@@ -117,7 +120,7 @@ async def admin_callbacks(call: CallbackQuery, state: FSMContext):
     if str(call.from_user.id) != ADMIN_ID:
         return await call.answer("Доступ запрещен", show_alert=True)
         
-    action = call.data.split("_")[1]
+    action = call.data.replace("admin_", "")
     
     if action == "back":
         await call.message.edit_text("🛠 *Панель администратора*\n\nВыберите раздел для управления белыми списками:", reply_markup=get_admin_keyboard())
@@ -129,6 +132,32 @@ async def admin_callbacks(call: CallbackQuery, state: FSMContext):
     elif action == "dbusers":
         await render_dbusers_page(call.message, 0)
         await call.answer()
+    elif action == "devlogs":
+        await state.update_data(devlogs_filter_user=None)
+        await render_devlogs_page(call.message, 0, state)
+        await call.answer()
+    elif action.startswith("devlogsPage:"):
+        page = int(action.split(":")[1])
+        await render_devlogs_page(call.message, page, state)
+        await call.answer()
+    elif action == "devlogs_clear":
+        headers = {"x-bot-token": API_SECRET}
+        async with aiohttp.ClientSession() as session:
+            async with session.delete(f"{API_BASE}/api/admin/device_events", headers=headers) as del_resp:
+                del_status = del_resp.status
+                del_text = await del_resp.text()
+                print(f"DEBUG: DELETE /api/admin/device_events returned {del_status} - {del_text}")
+        await call.answer("Логи очищены!", show_alert=True)
+        await render_devlogs_page(call.message, 0, state)
+    elif action == "devlogs_filter":
+        await state.set_state(AdminStates.waiting_for_devlogs_user)
+        sent = await call.message.answer("🔍 Введите логин пользователя для фильтрации логов:")
+        asyncio.create_task(delete_messages_later(sent, delay=300))
+        await call.answer()
+    elif action == "devlogs_clearfilter":
+        await state.update_data(devlogs_filter_user=None)
+        await call.answer("Фильтр сброшен!", show_alert=True)
+        await render_devlogs_page(call.message, 0, state)
 
 async def api_manage_whitelist(action, type_name, value, name=None):
     headers = {"x-bot-token": API_SECRET, "Content-Type": "application/json"}
@@ -233,6 +262,111 @@ async def render_dbusers_page(message: types.Message, page: int):
     
     text = f"🧑‍💻 *Зарегистрированные юзеры*\n\nВсего в базе: {len(users)}\nСтраница: {page+1}/{total_pages}"
     await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+
+async def render_devlogs_page(message: types.Message, page: int, state: FSMContext = None, edit_msg: bool = True):
+    headers = {"x-bot-token": API_SECRET}
+    filter_user = None
+    if state:
+        data = await state.get_data()
+        filter_user = data.get("devlogs_filter_user")
+        
+    url = f"{API_BASE}/api/admin/device_events"
+    params = {}
+    if filter_user:
+        params["username"] = filter_user
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, params=params, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    events = data.get("events", [])
+                    
+                    filter_str = f" (Поиск: `{filter_user}`)" if filter_user else ""
+                    
+                    if not events:
+                        text = f"📜 *Логи устройств*{filter_str}\n\nПусто."
+                        kb_btns = [
+                            [InlineKeyboardButton(text="🔍 Фильтр по юзеру", callback_data="admin_devlogs_filter")],
+                        ]
+                        if filter_user:
+                            kb_btns.append([InlineKeyboardButton(text="❌ Сбросить фильтр", callback_data="admin_devlogs_clearfilter")])
+                        kb_btns.append([InlineKeyboardButton(text="🔙 Назад в меню", callback_data="admin_back")])
+                        if edit_msg:
+                            return await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_btns))
+                        else:
+                            return await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_btns))
+                        
+                    per_page = 10
+                    total_pages = max(1, (len(events) + per_page - 1) // per_page)
+                    if page >= total_pages: page = total_pages - 1
+                    if page < 0: page = 0
+                    
+                    start_idx = page * per_page
+                    end_idx = start_idx + per_page
+                    page_events = events[start_idx:end_idx]
+                    
+                    text = f"📜 *Логи устройств*{filter_str}\nСтраница: {page+1}/{total_pages}\n\n"
+                    for ev in page_events:
+                        device_id = ev.get("device_id", "Unknown")
+                        event_type = ev.get("event_type", "Unknown").upper()
+                        browser_type = ev.get("browser_type", "Unknown")
+                        username = ev.get("username")
+                        
+                        raw_date = ev.get("created_at", "")
+                        if "T" in raw_date:
+                            parts = raw_date.split("T")
+                            created_at = parts[0] + " " + parts[1][:5]
+                        else:
+                            created_at = str(raw_date)[:16]
+                        
+                        type_emoji = "🟢" if event_type == "OPEN" else "🔴" if event_type == "CLOSE" else "🔑"
+                        browser_str = "🕵️ Скрытый" if browser_type == "hidden" else "🌐 Обычный"
+                        user_str = f"👤 {username}" if username else "👤 Без логина"
+                        
+                        text += f"{type_emoji} `{device_id}`\n"
+                        text += f"   {browser_str} | {user_str} | {event_type} | 🕒 {created_at}\n\n"
+                        
+                    kb = []
+                    nav_row = []
+                    if page > 0:
+                        nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"admin_devlogsPage:{page-1}"))
+                    if page < total_pages - 1:
+                        nav_row.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"admin_devlogsPage:{page+1}"))
+                    
+                    if nav_row: kb.append(nav_row)
+                    
+                    # Control buttons
+                    ctrl_row = [InlineKeyboardButton(text="🔍 Фильтр", callback_data="admin_devlogs_filter")]
+                    if filter_user:
+                        ctrl_row.append(InlineKeyboardButton(text="❌ Сбросить", callback_data="admin_devlogs_clearfilter"))
+                    kb.append(ctrl_row)
+                    
+                    kb.append([InlineKeyboardButton(text="🗑 Очистить логи", callback_data="admin_devlogs_clear")])
+                    kb.append([InlineKeyboardButton(text="🔙 Назад в меню", callback_data="admin_back")])
+                    
+                    from datetime import datetime
+                    text += f"\n\n🕒 Последнее обновление: {datetime.now().strftime('%H:%M:%S')}"
+                    
+                    if edit_msg:
+                        await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+                    else:
+                        await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+                else:
+                    err_text = await resp.text()
+                    print(f"DEBUG: /api/admin/device_events returned {resp.status} - {err_text}")
+                    err_msg = f"❌ Ошибка сервера при получении логов.\nСтатус: {resp.status}\nТекст: {err_text[:100]}"
+                    if edit_msg:
+                        await message.edit_text(err_msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]))
+                    else:
+                        await message.answer(err_msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]))
+    except Exception as e:
+        print("API error device events:", e)
+        err_msg = "❌ Ошибка сети при получении логов."
+        if edit_msg:
+            await message.edit_text(err_msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]))
+        else:
+            await message.answer(err_msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]))
 
 
 
@@ -345,6 +479,16 @@ async def process_edit_user_name(message: types.Message, state: FSMContext):
         sent = await message.answer("❌ Ошибка сервера при обновлении имени.")
     asyncio.create_task(delete_messages_later(message, sent, 300))
     await state.clear()
+
+@dp.message(AdminStates.waiting_for_devlogs_user)
+async def process_devlogs_user(message: types.Message, state: FSMContext):
+    username = message.text.strip()
+    await state.update_data(devlogs_filter_user=username)
+    
+    # Render immediately
+    await render_devlogs_page(message, 0, state, edit_msg=False)
+    
+    await state.set_state(None)
 
 @dp.callback_query(F.data.startswith("toggle_"))
 async def toggle_all_callback(call: CallbackQuery):
@@ -522,7 +666,6 @@ async def send_welcome(message: types.Message):
         if status == 200:
             welcome_text = (
                 f"🎉 *Регистрация успешна!*\n\n"
-                f"Твои учетные данные отправлены. Бэкенд автоматически определит твоё имя!\n"
                 f"⚡ *Быстрый вход:* напиши команду /login чтобы получить одноразовый 6-значный код для входа в браузер."
             )
             sent_message = await message.answer(welcome_text)
@@ -533,7 +676,6 @@ async def send_welcome(message: types.Message):
                 f"🔑 *Получить код для входа:* отправьте команду /login для получения одноразового кода авторизации в браузере."
             )
             sent_message = await message.answer(welcome_text)
-            asyncio.create_task(delete_messages_later(message, sent_message))
         else:
             sent_message = await message.answer("❌ Произошла ошибка при регистрации. Попробуйте позже.")
             asyncio.create_task(delete_messages_later(message, sent_message))

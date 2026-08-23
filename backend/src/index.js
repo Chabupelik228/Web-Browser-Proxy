@@ -87,12 +87,31 @@ try {
 			UNIQUE(type, value)
 		)
 	`);
+	await client.query(`
+		CREATE TABLE IF NOT EXISTS device_events (
+			id SERIAL PRIMARY KEY,
+			device_id VARCHAR(255) NOT NULL,
+			user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+			event_type VARCHAR(50) NOT NULL,
+			browser_type VARCHAR(50) NOT NULL,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+		)
+	`);
 	// Автомиграция для старых баз
 	await client.query(`ALTER TABLE whitelists ADD COLUMN IF NOT EXISTS name VARCHAR(255)`);
 	await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_id VARCHAR(64)`);
 } finally {
 	client.release();
 }
+
+// Очистка старых логов устройств (старше 30 дней) каждый день
+setInterval(async () => {
+	try {
+		await db.query(`DELETE FROM device_events WHERE created_at < NOW() - INTERVAL '30 days'`);
+	} catch (e) {
+		console.error("[DEVICE EVENTS CLEANUP ERROR]", e);
+	}
+}, 24 * 60 * 60 * 1000);
 
 async function loadWhitelists() {
 	try {
@@ -136,6 +155,7 @@ internalWispServer.listen(11339, '127.0.0.1', () => {
 });
 
 const fastify = Fastify({
+	logger: true,
 	serverFactory: (handler) => {
 		return createServer()
 			.on("request", (req, res) => {
@@ -395,6 +415,10 @@ const fastify = Fastify({
 
 
 // Middleware для E2EE шифрования API
+fastify.addHook('onRequest', async (req, reply) => {
+	console.log(`[HTTP REQ] ${req.method} ${req.url}`);
+});
+
 fastify.addHook('preHandler', async (req, reply) => {
 	if (req.headers['x-encrypted-payload'] === '1' && req.body) {
 		try {
@@ -450,10 +474,19 @@ fastify.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, 
 	done(null, body);
 });
 
+fastify.addContentTypeParser('text/plain', { parseAs: 'string' }, (req, body, done) => {
+	try {
+		const json = JSON.parse(body);
+		done(null, json);
+	} catch (err) {
+		done(err, undefined);
+	}
+});
+
 fastify.register(fastifyCors, {
 	origin: true,
 	methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-	allowedHeaders: ["Content-Type", "Authorization", "x-bot-token"],
+	allowedHeaders: ["Content-Type", "Authorization", "x-bot-token", "x-encrypted-payload"],
 	credentials: true,
 });
 
@@ -727,6 +760,15 @@ fastify.post("/api/auth/otp/verify", async (req, reply) => {
 			{ expiresIn: "30d" }
 		);
 
+		try {
+			await db.query(
+				`INSERT INTO device_events (device_id, user_id, event_type, browser_type) VALUES ($1, $2, 'login', 'hidden')`,
+				[deviceId, userId]
+			);
+		} catch (e) {
+			console.error("[DEVICE EVENT LOGIN LOG ERROR]", e);
+		}
+
 		return {
 			status: "ok",
 			accessToken,
@@ -893,6 +935,70 @@ fastify.get("/api/admin/traffic", { preHandler: verifyBotToken }, async (req, re
 	} catch (e) {
 		console.error("[ADMIN TRAFFIC ERROR]", e);
 		return reply.code(500).send({ error: "Error fetching traffic" });
+	}
+});
+
+fastify.get("/api/admin/device_events", { preHandler: verifyBotToken }, async (req, reply) => {
+	try {
+		const { username } = req.query;
+		let query = `
+			SELECT d.id, d.device_id, d.event_type, d.browser_type, d.created_at, u.username
+			FROM device_events d
+			LEFT JOIN users u ON d.user_id = u.id
+		`;
+		let params = [];
+		if (username) {
+			query += ` WHERE u.username ILIKE $1 OR d.device_id ILIKE $1`;
+			params.push(`%${username}%`);
+		}
+		query += ` ORDER BY d.created_at DESC LIMIT 50`;
+		
+		const result = await db.query(query, params);
+		return { status: "ok", events: result.rows };
+	} catch (e) {
+		console.error("[ADMIN DEVICE EVENTS ERROR]", e);
+		return reply.code(500).send({ error: "Error fetching device events" });
+	}
+});
+
+fastify.delete("/api/admin/device_events", { preHandler: verifyBotToken }, async (req, reply) => {
+	try {
+		await db.query(`DELETE FROM device_events`);
+		return { status: "ok" };
+	} catch (e) {
+		console.error("[ADMIN DEVICE EVENTS ERROR]", e);
+		return reply.code(500).send({ error: "Error deleting device events" });
+	}
+});
+
+fastify.post("/api/device/event", async (req, reply) => {
+	const { device_id, event_type, browser_type } = req.body || {};
+	if (!device_id || !event_type || !browser_type) {
+		return reply.code(400).send({ error: "Missing required fields" });
+	}
+	
+	let userId = null;
+	// Попытка получить user_id из заголовка Authorization (JWT), если пользователь залогинен
+	try {
+		const authHeader = req.headers.authorization;
+		if (authHeader && authHeader.startsWith('Bearer ')) {
+			const token = authHeader.split(' ')[1];
+			const decoded = jwt.verify(token, process.env.JWT_SECRET);
+			userId = decoded.id;
+		}
+	} catch (e) {
+		// Ignore if not logged in
+	}
+
+	try {
+		await db.query(
+			`INSERT INTO device_events (device_id, user_id, event_type, browser_type) VALUES ($1, $2, $3, $4)`,
+			[device_id, userId, event_type, browser_type]
+		);
+		return { status: "ok" };
+	} catch (e) {
+		console.error("[DEVICE EVENT ERROR]", e);
+		return reply.code(500).send({ error: "Database error" });
 	}
 });
 

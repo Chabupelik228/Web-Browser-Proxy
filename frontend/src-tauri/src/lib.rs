@@ -8,6 +8,11 @@ use commands::*;
 use tauri::Manager;
 use tunnel::TunnelManager;
 
+#[tauri::command]
+fn force_exit() {
+    std::process::exit(0);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Полное удаление всех данных (cookies, localStorage, cache) ДО запуска WebView2,
@@ -98,11 +103,13 @@ pub fn run() {
             native_show_in_folder,
             native_get_downloads_dir,
             self_destruct,
+            force_exit,
         ])
         .on_window_event(|window, event| {
             match event {
                 tauri::WindowEvent::CloseRequested { .. } => {
-                    std::process::exit(0);
+                    // Let Javascript intercept the close event to send the CLOSE network log
+                    // std::process::exit(0);
                 }
                 tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
                     let app = window.app_handle();

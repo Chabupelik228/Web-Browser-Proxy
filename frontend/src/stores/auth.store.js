@@ -270,5 +270,6 @@ export const useAuthStore = defineStore('auth', () => {
         isDeviceFoundToastVisible,
         loginWithOtp,
         logout,
+        initDeviceId,
     };
 });
