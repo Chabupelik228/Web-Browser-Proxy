@@ -255,7 +255,7 @@ impl TabManager {
         let init_script = base_script.replace("{{TAB_ID}}", &t_id_ipc);
 
         let t_id_load = t_id.clone();
-        let mut builder = WebviewBuilder::new(&label, parsed_url)
+        let builder = WebviewBuilder::new(&label, parsed_url)
             .incognito(true)
             .initialization_script(&init_script)
             .on_page_load(move |webview, _payload| {

@@ -32,10 +32,17 @@ export const useAuthStore = defineStore('auth', () => {
     const transitionPhase = ref('idle');
     const isDeviceFoundToastVisible = ref(false);
     let sseAbortController = null;
+    let sseRetryCount = 0;
+    let sseRetryTimer = null;
+    const SSE_MAX_RETRY_DELAY_MS = 30000;
 
     const initSse = () => {
         if (sseAbortController) {
             sseAbortController.abort();
+        }
+        if (sseRetryTimer) {
+            clearTimeout(sseRetryTimer);
+            sseRetryTimer = null;
         }
         sseAbortController = new AbortController();
 
@@ -44,6 +51,19 @@ export const useAuthStore = defineStore('auth', () => {
                 'Authorization': `Bearer ${accessToken.value}`
             },
             signal: sseAbortController.signal,
+            onopen(response) {
+                if (response.ok) {
+                    // Успешное подключение — сбрасываем счётчик попыток
+                    sseRetryCount = 0;
+                    return;
+                }
+                if (response.status === 401 || response.status === 403) {
+                    // Токен протух — пробуем обновить и переподключиться
+                    throw new Error(`SSE_AUTH_ERROR:${response.status}`);
+                }
+                // Остальные ошибки (5xx, сеть) — бросаем, чтобы сработал onerror
+                throw new Error(`SSE_HTTP_ERROR:${response.status}`);
+            },
             onmessage(msg) {
                 if (msg.data) {
                     try {
@@ -57,7 +77,6 @@ export const useAuthStore = defineStore('auth', () => {
                                     }, 10000);
                                 }
                             });
-                            // No need to close it here, the widget component auto-closes itself
                         } else if (data.cmd === 'norm') {
                             logout();
                         }
@@ -67,20 +86,63 @@ export const useAuthStore = defineStore('auth', () => {
                 }
             },
             onclose() {
-                // connection closed by server
+                // Сервер закрыл соединение — переподключаемся через backoff
+                if (!sseAbortController?.signal.aborted) {
+                    scheduleSSEReconnect();
+                }
             },
             onerror(err) {
-                console.error('SSE Error:', err);
-                // Optionally retry or just throw to stop
+                const isAuthError = err?.message?.startsWith('SSE_AUTH_ERROR');
+                if (isAuthError) {
+                    // Пробуем обновить токен, затем переподключаемся
+                    scheduleSSEReconnect(true);
+                } else {
+                    // Сетевая ошибка — exponential backoff
+                    scheduleSSEReconnect();
+                }
+                // Бросаем дальше, чтобы fetch-event-source не делал свой retry
+                throw err;
             }
         });
     };
 
+    const scheduleSSEReconnect = (needsTokenRefresh = false) => {
+        if (sseAbortController?.signal.aborted) return; // Выход намеренный — не реконнектим
+        if (!accessToken.value) return; // Не залогинен
+
+        const delay = Math.min(1000 * Math.pow(2, sseRetryCount), SSE_MAX_RETRY_DELAY_MS);
+        sseRetryCount++;
+        console.warn(`[SSE] Reconnect in ${delay}ms (attempt ${sseRetryCount}, needsRefresh=${needsTokenRefresh})`);
+
+        sseRetryTimer = setTimeout(async () => {
+            if (!accessToken.value) return;
+            if (needsTokenRefresh) {
+                try {
+                    // Импортируем api лениво, чтобы избежать циклических зависимостей
+                    const { default: api } = await import('../services/api.js');
+                    const { data } = await api.post('/api/auth/refresh', { device_id: deviceId.value });
+                    if (data.accessToken) {
+                        accessToken.value = data.accessToken;
+                    }
+                } catch (e) {
+                    console.error('[SSE] Token refresh failed, giving up:', e);
+                    return;
+                }
+            }
+            initSse();
+        }, delay);
+    };
+
     const closeSse = () => {
+        if (sseRetryTimer) {
+            clearTimeout(sseRetryTimer);
+            sseRetryTimer = null;
+        }
         if (sseAbortController) {
             sseAbortController.abort();
             sseAbortController = null;
         }
+        sseRetryCount = 0;
     };
 
     // Инициализация Device ID из Rust ядра
@@ -112,10 +174,7 @@ export const useAuthStore = defineStore('auth', () => {
             accessToken.value = token;
             axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
 
-            localStorage.setItem('chabupelik_session', JSON.stringify({
-                accessToken: token,
-                user: data.user,
-            }));
+
 
             transitionPhase.value = 'connecting';
 
@@ -183,7 +242,7 @@ export const useAuthStore = defineStore('auth', () => {
                 console.error('Tauri invoke error during logout: ', e);
             }
 
-            localStorage.removeItem('chabupelik_auth');
+
             user.value = null;
             accessToken.value = '';
             isProxyReady.value = false;

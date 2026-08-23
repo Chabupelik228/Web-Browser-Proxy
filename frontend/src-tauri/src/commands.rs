@@ -2,7 +2,7 @@
 use crate::browser::TabManager;
 use crate::security::device::get_hardware_fingerprint;
 use crate::tunnel::{ProxyConnectionInfo, TunnelManager};
-use tauri::{Manager, State, WebviewWindow};
+use tauri::{Manager, State};
 
 /// Возвращает уникальный аппаратный отпечаток устройства
 #[tauri::command]
@@ -26,7 +26,26 @@ pub async fn start_tunnel(
     for (_label, wv) in app.webviews() {
         let _ = wv.clear_all_browsing_data();
     }
-    log::info!("[TUNNEL] Browsing data cleared before switching to Tunnel mode");
+
+    // Принудительно удаляем HTTP disk-cache WebView2 на диске.
+    // clear_all_browsing_data() работает только для in-memory кэша активных webview,
+    // но HTTP-кэш на диске (EBWebView) может пережить смену сессии.
+    // Без этого 2ip.ru и подобные сервисы отдают закэшированный ответ с реальным IP.
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        // Стандартная папка HTTP-кэша WebView2 runtime
+        let cache_path = std::path::Path::new(&local_app_data).join("EBWebView");
+        if cache_path.exists() {
+            let _ = std::fs::remove_dir_all(&cache_path);
+            log::info!("[TUNNEL] EBWebView HTTP cache removed: {:?}", cache_path);
+        }
+        // Также чистим папку профиля FakeChromeView
+        let chrome_path = std::path::Path::new(&local_app_data).join("com.google.chrome");
+        if chrome_path.exists() {
+            let _ = std::fs::remove_dir_all(&chrome_path);
+            log::info!("[TUNNEL] com.google.chrome profile removed: {:?}", chrome_path);
+        }
+    }
+    log::info!("[TUNNEL] All browsing data cleared before switching to Tunnel mode");
 
     manager.start(&wisp_url, &token).await
 }
@@ -288,7 +307,7 @@ pub fn native_favicon_changed(app: tauri::AppHandle, tab_id: String, favicon: St
 }
 
 #[tauri::command]
-pub fn native_context_menu(app: tauri::AppHandle, window: String, href: String, src: String, selection: String) {
+pub fn native_context_menu(_app: tauri::AppHandle, window: String, href: String, src: String, selection: String) {
     println!("Context menu: window={}, href={}, src={}, selection={}", window, href, src, selection);
 }
 

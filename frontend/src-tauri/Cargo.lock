@@ -368,36 +368,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
-name = "chabupelik-browser"
-version = "1.0.0"
-dependencies = [
- "aes-gcm",
- "base64 0.22.1",
- "byteorder",
- "bytes",
- "dotenvy",
- "futures-util",
- "log",
- "native-tls",
- "obfstr",
- "parking_lot",
- "pbkdf2",
- "rand 0.8.7",
- "serde",
- "serde_json",
- "sha2",
- "sysinfo",
- "tauri",
- "tauri-build",
- "tauri-plugin-log",
- "tauri-plugin-shell",
- "tokio",
- "tokio-tungstenite",
- "url",
- "urlencoding",
-]
-
-[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3096,6 +3066,36 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "secure-browser"
+version = "1.0.0"
+dependencies = [
+ "aes-gcm",
+ "base64 0.22.1",
+ "byteorder",
+ "bytes",
+ "dotenvy",
+ "futures-util",
+ "log",
+ "native-tls",
+ "obfstr",
+ "parking_lot",
+ "pbkdf2",
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sysinfo",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-log",
+ "tauri-plugin-shell",
+ "tokio",
+ "tokio-tungstenite",
+ "url",
+ "urlencoding",
+]
 
 [[package]]
 name = "security-framework"
