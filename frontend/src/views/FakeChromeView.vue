@@ -362,7 +362,6 @@ const scrollTabs = (delta) => {
 const tabs = ref([{ id: 'fake_tab_1', title: 'Новая вкладка', url: 'https://google.com', isLoading: true, isNewTab: true, favicon: '', _animating: false }]);
 const activeTabId = ref('fake_tab_1');
 
-// isCurrentTabLoadingAndNew is removed
 
 const formatDisplayUrl = (url) => {
   if (!url) return '';

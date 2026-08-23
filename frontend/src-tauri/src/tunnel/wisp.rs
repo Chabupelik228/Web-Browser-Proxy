@@ -1,4 +1,4 @@
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use byteorder::LittleEndian;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
-use tokio_tungstenite::client_async_tls;
+
 use tokio_tungstenite::tungstenite::handshake::client::Request;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use url::Url;
@@ -50,7 +50,7 @@ impl WispClient {
 
         // Проверяем наличие апстрим-прокси
         let upstream_proxy = option_env!("VITE_UPSTREAM_PROXY").unwrap_or("").to_string();
-        let mut tcp_stream = if !upstream_proxy.is_empty() {
+        let tcp_stream = if !upstream_proxy.is_empty() {
             let proxy_url = Url::parse(&upstream_proxy).map_err(|e| format!("Некорректный VITE_UPSTREAM_PROXY: {}", e))?;
             let proxy_host = proxy_url.host_str().ok_or("Отсутствует хост в прокси")?;
             let proxy_port = proxy_url.port_or_known_default().unwrap_or(3128);
@@ -124,7 +124,7 @@ impl WispClient {
         let mut key_hasher = Sha256::new();
         key_hasher.update(salt.as_bytes());
         let key_bytes: [u8; 32] = key_hasher.finalize().into();
-        let aes_key = Key::<Aes256Gcm>::from_slice(&key_bytes).clone();
+        let aes_key = *Key::<Aes256Gcm>::from_slice(&key_bytes);
 
         let stream_channels = Arc::new(Mutex::new(HashMap::<u32, mpsc::Sender<Vec<u8>>>::new()));
         let stream_channels_rx = stream_channels.clone();

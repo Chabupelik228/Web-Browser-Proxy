@@ -35,9 +35,6 @@ pub fn run() {
         "WEBVIEW2_USER_DATA_FOLDER",
         &webview_data_dir,
     );
-
-    let _ = dotenvy::from_path("../.env");
-    let _ = dotenvy::from_path(".env");
     
     let proxy_port = option_env!("VITE_LOCAL_PROXY_PORT").unwrap_or("11338").to_string();
     let api_domain = option_env!("VITE_API_DOMAIN").unwrap_or("").to_string();
@@ -77,8 +74,6 @@ pub fn run() {
             get_device_id,
             start_tunnel,
             stop_tunnel,
-            get_tunnel_status,
-            native_clear_browsing_data,
             native_navigate_tab,
             native_switch_tab,
             native_close_tab,
@@ -90,7 +85,6 @@ pub fn run() {
             native_minimize_window,
             native_maximize_window,
             native_close_window,
-            native_close_window_by_label,
             native_start_dragging,
             native_title_changed,
             native_favicon_changed,
@@ -98,7 +92,6 @@ pub fn run() {
             native_context_menu,
             native_url_changed,
             native_set_zoom,
-            native_download_started,
             native_open_path,
             native_show_in_folder,
             native_get_downloads_dir,

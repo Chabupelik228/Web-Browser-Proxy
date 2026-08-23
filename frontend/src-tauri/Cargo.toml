@@ -42,6 +42,6 @@ rand = "0.8"
 base64 = "0.22"
 
 # Сбор информации о системе для Device Fingerprint
-sysinfo = "0.33"
+sysinfo = "0.39.6"
 dotenvy = "0.15.7"
 obfstr = "0.4"

@@ -321,9 +321,7 @@ const sessionDownloads = ref([]);
 const isDownloadsOpen = ref(false); // Used just for button active state
 const downloadBtnRef = ref(null);
 const flyingItem = ref(null);
-const showSaveModal = ref(false); // We don't use this anymore but keep ref
-const pendingDownload = ref(null);
-const targetSavePath = ref('');
+
 let lastWidgetCloseTime = 0;
 
 const syncDownloadsToWidget = () => {

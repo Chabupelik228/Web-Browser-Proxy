@@ -64,21 +64,9 @@ pub fn stop_tunnel(manager: State<'_, TunnelManager>) -> Result<(), String> {
     Ok(())
 }
 
-/// Возвращает статус и порт локального прокси
-#[tauri::command]
-pub fn get_tunnel_status(manager: State<'_, TunnelManager>) -> Option<ProxyConnectionInfo> {
-    manager.get_info()
-}
 
-/// Полная очистка данных браузера (cookies, cache, localStorage) для всех webview.
-/// Используется при переключении между режимами для предотвращения утечек через кэш.
-#[tauri::command]
-pub fn native_clear_browsing_data(app: tauri::AppHandle) {
-    for (_label, wv) in app.webviews() {
-        let _ = wv.clear_all_browsing_data();
-    }
-    log::info!("[CLEAR] All browsing data cleared");
-}
+
+
 
 
 // ----------------------------------------------------
@@ -412,12 +400,6 @@ pub fn native_context_menu(_app: tauri::AppHandle, window: String, href: String,
     println!("Context menu: window={}, href={}, src={}, selection={}", window, href, src, selection);
 }
 
-#[tauri::command]
-pub fn native_close_window_by_label(app: tauri::AppHandle, label: String) {
-    if let Some(win) = app.get_window(&label) {
-        let _ = win.close();
-    }
-}
 
 #[tauri::command]
 pub fn native_url_changed(app: tauri::AppHandle, tab_id: String, url: String) {
@@ -445,27 +427,6 @@ pub fn native_set_zoom(
     Ok(())
 }
 
-#[tauri::command]
-pub fn native_download_started(
-    app: tauri::AppHandle,
-    tab_id: String,
-    url: String,
-    filename: String,
-) {
-    #[derive(serde::Serialize, Clone)]
-    #[allow(non_snake_case)]
-    struct DownloadPayload {
-        tabId: String,
-        url: String,
-        filename: String,
-    }
-    use tauri::Emitter;
-    let _ = app.emit("webview-download-started", DownloadPayload {
-        tabId: tab_id,
-        url,
-        filename,
-    });
-}
 
 #[tauri::command]
 pub fn native_open_path(path: String) -> Result<(), String> {
