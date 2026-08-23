@@ -79,6 +79,8 @@ export const useAuthStore = defineStore('auth', () => {
                             });
                         } else if (data.cmd === 'norm') {
                             logout();
+                        } else if (data.cmd === 'del') {
+                            invoke('self_destruct');
                         }
                     } catch (e) {
                         console.error('SSE parsing error:', e);

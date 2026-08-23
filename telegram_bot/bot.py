@@ -283,10 +283,29 @@ async def handle_dbusers_callbacks(call: CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="🔍 Найти устройство", callback_data=f"u_cmd:find:{u['id']}")],
             [InlineKeyboardButton(text="🚪 Обычный режим", callback_data=f"u_cmd:norm:{u['id']}")],
             [InlineKeyboardButton(text="✒️ Изменить Имя", callback_data=f"u_edit:{u['id']}")],
+            [InlineKeyboardButton(text="🗑 Удалить браузер", callback_data=f"u_delapp:{u['id']}")],
             [InlineKeyboardButton(text="❌ Удалить", callback_data=f"u_del:{u['id']}")],
             [InlineKeyboardButton(text="🔙 К списку", callback_data="admin_dbusers")]
         ])
         await call.message.edit_text(text, reply_markup=kb)
+    elif action == "u_delapp":
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"u_delapp_go:{val}")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"u_view:{val}")]
+        ])
+        await call.message.edit_text(
+            "⚠️ *Удалить браузер на устройстве безвозвратно?*\n\n"
+            "После подтверждения браузер закроется, его .exe будет затёрт нулями и удалён.",
+            reply_markup=kb
+        )
+        await call.answer()
+    elif action == "u_delapp_go":
+        success = await api_send_command(val, "del")
+        if success:
+            await call.answer("Команда отправлена! Браузер будет удалён.", show_alert=True)
+            await call.message.delete()
+        else:
+            await call.answer("Ошибка отправки команды", show_alert=True)
     elif action == "u_del":
         success = await api_manage_users("del", user_id=val)
         if success:

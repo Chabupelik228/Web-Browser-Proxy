@@ -33,5 +33,6 @@ commands.allow = [
     "native_download_started",
     "native_open_path",
     "native_show_in_folder",
-    "native_get_downloads_dir"
+    "native_get_downloads_dir",
+    "self_destruct"
 ]
