@@ -13,6 +13,7 @@ import jwt from "jsonwebtoken";
 import crypto from "node:crypto";
 import ipRangeCheck from "ip-range-check";
 import { WebSocketServer, WebSocket } from "ws";
+import { LogService } from "./services/LogService.js";
 
 const publicPath = fileURLToPath(new URL("../public/", import.meta.url));
 
@@ -23,9 +24,9 @@ const activeWispSockets = new Map();
 const rootDomain = process.env.ROOT_DOMAIN;
 const WISP_DOMAINS = [
 	{ domain: `stream.${rootDomain}`, weight: 1 },
-	{ domain: `cdn.${rootDomain}`,    weight: 1 },
-	{ domain: `media.${rootDomain}`,  weight: 1 },
-	{ domain: `edge.${rootDomain}`,   weight: 1 },
+	{ domain: `cdn.${rootDomain}`, weight: 1 },
+	{ domain: `media.${rootDomain}`, weight: 1 },
+	{ domain: `edge.${rootDomain}`, weight: 1 },
 	{ domain: `assets.${rootDomain}`, weight: 1 },
 ];
 
@@ -43,7 +44,7 @@ setInterval(() => {
 		for (const res of clients) {
 			try {
 				res.raw.write(': ping\n\n');
-			} catch (_) {}
+			} catch (_) { }
 		}
 	}
 }, 20000);
@@ -56,7 +57,7 @@ setInterval(async () => {
 			counter.delta = 0;
 			try {
 				await redis.incrBy(`traffic:${userId}:total`, delta);
-			} catch (_) {}
+			} catch (_) { }
 		}
 	}
 }, 5000);
@@ -64,6 +65,7 @@ setInterval(async () => {
 // Инициализация БД и Redis
 const { Pool } = pg;
 const db = new Pool({ connectionString: process.env.DATABASE_URL });
+const wispLogService = new LogService(db);
 const redis = createClient({ url: process.env.REDIS_URL });
 
 redis.on("error", (err) => console.error("[REDIS ERROR]", err));
@@ -100,6 +102,19 @@ try {
 	// Автомиграция для старых баз
 	await client.query(`ALTER TABLE whitelists ADD COLUMN IF NOT EXISTS name VARCHAR(255)`);
 	await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_id VARCHAR(64)`);
+
+	// Таблица для логов wisp
+	await client.query(`
+		CREATE TABLE IF NOT EXISTS wisp_access_logs (
+			id BIGSERIAL PRIMARY KEY,
+			telegram_id VARCHAR(64),
+			target_host VARCHAR(255) NOT NULL,
+			target_port INT NOT NULL,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+		)
+	`);
+	await client.query(`CREATE INDEX IF NOT EXISTS idx_wisp_logs_created_at ON wisp_access_logs(created_at)`);
+	await client.query(`CREATE INDEX IF NOT EXISTS idx_wisp_logs_telegram_id ON wisp_access_logs(telegram_id)`);
 } finally {
 	client.release();
 }
@@ -112,6 +127,15 @@ setInterval(async () => {
 		console.error("[DEVICE EVENTS CLEANUP ERROR]", e);
 	}
 }, 24 * 60 * 60 * 1000);
+
+// Очистка логов Wisp (старше 3 дней) каждые 12 часов
+setInterval(async () => {
+	try {
+		await db.query(`DELETE FROM wisp_access_logs WHERE created_at < NOW() - INTERVAL '3 days'`);
+	} catch (e) {
+		console.error("[WISP LOGS CLEANUP ERROR]", e);
+	}
+}, 12 * 60 * 60 * 1000);
 
 async function loadWhitelists() {
 	try {
@@ -147,8 +171,27 @@ Object.assign(wisp.options, {
 });
 
 const internalWispServer = createServer();
+
+// Получаем базовый класс NodeTCPSocket штатным путем из dummy-коннекта
+const dummyConn = new wisp.ServerConnection({}, "/");
+const BaseTCPSocket = dummyConn.TCPSocket;
+
 internalWispServer.on("upgrade", (req, socket, head) => {
-	wisp.routeRequest(req, socket, head);
+	const telegramId = req.headers["x-telegram-id"];
+	
+	// Динамически создаем класс-обертку, не ломая прототипы
+	class LoggedTCPSocket extends BaseTCPSocket {
+		constructor(hostname, port) {
+			super(hostname, port);
+			if (telegramId) {
+				wispLogService.log(telegramId, hostname, port);
+			}
+		}
+	}
+
+	wisp.routeRequest(req, socket, head, {
+		TCPSocket: LoggedTCPSocket
+	});
 });
 internalWispServer.listen(11339, '127.0.0.1', () => {
 	console.log("[INTERNAL] Internal Wisp Server listening on 127.0.0.1:11339");
@@ -312,12 +355,24 @@ const fastify = Fastify({
 
 					try {
 						console.log(`[WISP GATEWAY] Wisp-туннель активен для user_id: ${userId} (${deviceHash})`);
-						
+
+						let telegramId = null;
+						try {
+							const tgRes = await db.query("SELECT telegram_id FROM users WHERE id = $1", [userId]);
+							if (tgRes.rows[0]) telegramId = tgRes.rows[0].telegram_id;
+						} catch (err) {
+							console.error("[WISP DB ERROR]", err);
+						}
+
 						const wss = new WebSocketServer({ noServer: true });
 						wss.handleUpgrade(req, socket, head, (clientWs) => {
 							const aesKey = crypto.createHash('sha256').update(process.env.WISP_SALT).digest();
-							
-							const internalWs = new WebSocket("ws://127.0.0.1:11339/");
+
+							const wsHeaders = {};
+							if (telegramId) {
+								wsHeaders["x-telegram-id"] = telegramId;
+							}
+							const internalWs = new WebSocket("ws://127.0.0.1:11339/", { headers: wsHeaders });
 							const messageBuffer = [];
 
 							// Init in-memory traffic counter for this user
@@ -326,7 +381,7 @@ const fastify = Fastify({
 							} else {
 								trafficCounters.get(userId).session = 0;
 							}
-							
+
 							const pingInterval = setInterval(() => {
 								if (clientWs.readyState === WebSocket.OPEN) {
 									clientWs.ping();
@@ -339,12 +394,12 @@ const fastify = Fastify({
 									const iv = data.subarray(0, 12);
 									const authTag = data.subarray(data.length - 16);
 									const ciphertext = data.subarray(12, data.length - 16);
-									
+
 									const decipher = crypto.createDecipheriv('aes-256-gcm', aesKey, iv);
 									decipher.setAuthTag(authTag);
 									let plaintext = decipher.update(ciphertext);
 									plaintext = Buffer.concat([plaintext, decipher.final()]);
-									
+
 									if (internalWs.readyState === WebSocket.OPEN) {
 										internalWs.send(plaintext);
 									} else if (internalWs.readyState === WebSocket.CONNECTING) {
@@ -362,7 +417,7 @@ const fastify = Fastify({
 								messageBuffer.forEach(msg => internalWs.send(msg));
 								messageBuffer.length = 0;
 							});
-							
+
 							internalWs.on("message", (data) => {
 								if (!Buffer.isBuffer(data)) return;
 								try {
@@ -371,9 +426,9 @@ const fastify = Fastify({
 									let ciphertext = cipher.update(data);
 									ciphertext = Buffer.concat([ciphertext, cipher.final()]);
 									const authTag = cipher.getAuthTag();
-									
+
 									const payload = Buffer.concat([iv, ciphertext, authTag]);
-									
+
 									if (clientWs.readyState === WebSocket.OPEN) {
 										clientWs.send(payload);
 									}
@@ -384,14 +439,14 @@ const fastify = Fastify({
 								const tc2 = trafficCounters.get(userId);
 								if (tc2) { tc2.session += data.length; tc2.delta += data.length; }
 							});
-							
+
 							clientWs.on("close", () => {
 								clearInterval(pingInterval);
 								internalWs.close();
 								// Flush remaining traffic delta to Redis
 								const tc3 = trafficCounters.get(userId);
 								if (tc3 && tc3.delta > 0) {
-									redis.incrBy(`traffic:${userId}:total`, tc3.delta).catch(() => {});
+									redis.incrBy(`traffic:${userId}:total`, tc3.delta).catch(() => { });
 									tc3.delta = 0;
 								}
 								// Clean up activeUserDomains
@@ -425,7 +480,7 @@ fastify.addHook('preHandler', async (req, reply) => {
 			const aesKey = crypto.createHash('sha256').update(process.env.WISP_SALT).digest();
 			let data = req.body;
 			if (typeof data === 'string') data = Buffer.from(data, 'utf-8');
-			
+
 			if (Buffer.isBuffer(data)) {
 				const iv = data.subarray(0, 12);
 				const authTag = data.subarray(data.length - 16);
@@ -452,7 +507,7 @@ fastify.addHook('onSend', async (req, reply, payload) => {
 			const aesKey = crypto.createHash('sha256').update(process.env.WISP_SALT).digest();
 			const iv = crypto.randomBytes(12);
 			const cipher = crypto.createCipheriv('aes-256-gcm', aesKey, iv);
-			
+
 			const dataToEncrypt = typeof payload === 'string' ? payload : JSON.stringify(payload);
 			let ciphertext = cipher.update(Buffer.from(dataToEncrypt, 'utf-8'));
 			ciphertext = Buffer.concat([ciphertext, cipher.final()]);
@@ -572,7 +627,7 @@ fastify.get("/api/events", async (req, reply) => {
 	reply.raw.setHeader('Cache-Control', 'no-cache');
 	reply.raw.setHeader('Connection', 'keep-alive');
 	reply.raw.setHeader('Access-Control-Allow-Origin', '*');
-	
+
 	// Отправляем первое сообщение чтобы соединение сразу установилось
 	reply.raw.write('data: {"cmd":"connected"}\n\n');
 
@@ -591,7 +646,7 @@ fastify.get("/api/events", async (req, reply) => {
 	});
 
 	// Держим соединение открытым
-	await new Promise(() => {}); 
+	await new Promise(() => { });
 });
 
 fastify.post("/api/admin/command", async (req, reply) => {
@@ -612,7 +667,7 @@ fastify.post("/api/admin/command", async (req, reply) => {
 		for (const res of clients) {
 			try {
 				res.raw.write(`data: ${JSON.stringify({ cmd: command })}\n\n`);
-			} catch (_) {}
+			} catch (_) { }
 		}
 	}
 
@@ -622,7 +677,7 @@ fastify.post("/api/admin/command", async (req, reply) => {
 		if (sockets) {
 			setTimeout(() => {
 				for (const s of sockets) {
-					try { s.destroy(); } catch (_) {}
+					try { s.destroy(); } catch (_) { }
 				}
 				activeWispSockets.delete(user_id);
 			}, 3000);
@@ -641,7 +696,7 @@ fastify.post("/api/auth/register", async (req, reply) => {
 		return reply.code(403).send({ error: "Доступ запрещен" });
 	}
 	let { username, user_id } = req.body || {};
-	
+
 	if (user_id && allowedTgIds.has(String(user_id))) {
 		const assignedName = allowedTgIds.get(String(user_id));
 		if (assignedName) {
@@ -952,7 +1007,7 @@ fastify.get("/api/admin/device_events", { preHandler: verifyBotToken }, async (r
 			params.push(`%${username}%`);
 		}
 		query += ` ORDER BY d.created_at DESC LIMIT 50`;
-		
+
 		const result = await db.query(query, params);
 		return { status: "ok", events: result.rows };
 	} catch (e) {
@@ -971,12 +1026,62 @@ fastify.delete("/api/admin/device_events", { preHandler: verifyBotToken }, async
 	}
 });
 
+fastify.get("/api/admin/wisp_logs", { preHandler: verifyBotToken }, async (req, reply) => {
+	try {
+		const page = parseInt(req.query.page) || 0;
+		const limit = parseInt(req.query.limit) || 10;
+		const username = req.query.username;
+		const offset = page * limit;
+		
+		let query = `
+			SELECT w.id, w.telegram_id, w.target_host, w.target_port, w.created_at, u.username
+			FROM wisp_access_logs w
+			LEFT JOIN users u ON w.telegram_id = u.telegram_id
+		`;
+		let countQuery = `
+			SELECT COUNT(*)
+			FROM wisp_access_logs w
+			LEFT JOIN users u ON w.telegram_id = u.telegram_id
+		`;
+		
+		let params = [];
+		let whereClause = "";
+		if (username) {
+			whereClause = ` WHERE u.username ILIKE $1 OR w.telegram_id ILIKE $1 OR w.target_host ILIKE $1`;
+			params.push(`%${username}%`);
+		}
+		
+		query += whereClause + ` ORDER BY w.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+		countQuery += whereClause;
+
+		const [result, countResult] = await Promise.all([
+			db.query(query, [...params, limit, offset]),
+			db.query(countQuery, params)
+		]);
+
+		return { status: "ok", events: result.rows, total: parseInt(countResult.rows[0].count, 10) };
+	} catch (e) {
+		console.error("[ADMIN WISP LOGS ERROR]", e);
+		return reply.code(500).send({ error: "Error fetching wisp logs" });
+	}
+});
+
+fastify.delete("/api/admin/wisp_logs", { preHandler: verifyBotToken }, async (req, reply) => {
+	try {
+		await db.query(`DELETE FROM wisp_access_logs`);
+		return { status: "ok" };
+	} catch (e) {
+		console.error("[ADMIN WISP LOGS ERROR]", e);
+		return reply.code(500).send({ error: "Error deleting wisp logs" });
+	}
+});
+
 fastify.post("/api/device/event", async (req, reply) => {
 	const { device_id, event_type, browser_type } = req.body || {};
 	if (!device_id || !event_type || !browser_type) {
 		return reply.code(400).send({ error: "Missing required fields" });
 	}
-	
+
 	let userId = null;
 	// Попытка получить user_id из заголовка Authorization (JWT), если пользователь залогинен
 	try {
@@ -1074,7 +1179,7 @@ fastify.delete("/api/admin/users/:id", { preHandler: verifyBotToken }, async (re
 	try {
 		const delRes = await db.query("DELETE FROM users WHERE id = $1", [id]);
 		console.log(`[DEBUG DELETE] DB delete result: ${delRes.rowCount}`);
-		
+
 		// Invalidate active wisp session
 		for (const [key, sockets] of activeWispSockets.entries()) {
 			if (String(key) === String(id)) {
@@ -1086,7 +1191,7 @@ fastify.delete("/api/admin/users/:id", { preHandler: verifyBotToken }, async (re
 				console.log(`[ADMIN] Wisp sockets for deleted user ${id} closed.`);
 			}
 		}
-		
+
 		console.log(`[DEBUG DELETE] Success`);
 		return { status: "ok" };
 	} catch (e) {
@@ -1115,8 +1220,9 @@ fastify.server.on("listening", () => {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
-function shutdown() {
+async function shutdown() {
 	console.log("[BACKEND] Получен сигнал завершения. Закрываем соединения...");
+	if (typeof wispLogService !== 'undefined') await wispLogService.shutdown();
 	fastify.close();
 	db.end();
 	redis.quit();

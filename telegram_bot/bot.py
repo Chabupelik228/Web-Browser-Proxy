@@ -71,11 +71,13 @@ class AdminStates(StatesGroup):
     waiting_for_name = State()
     waiting_for_user_new_name = State()
     waiting_for_devlogs_user = State()
+    waiting_for_wisplogs_user = State()
 
 def get_admin_keyboard():
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🧑‍💻 Зарегистрированные юзеры", callback_data="admin_dbusers")],
         [InlineKeyboardButton(text="📜 Логи устройств", callback_data="admin_devlogs")],
+        [InlineKeyboardButton(text="🌐 Логи Wisp", callback_data="admin_wisplogs")],
         [InlineKeyboardButton(text="🌐 Управление IP", callback_data="admin_ip")],
         [InlineKeyboardButton(text="👥 Управление TG ID", callback_data="admin_tg")],
         [InlineKeyboardButton(text="🔄 Обновить кэш с сервера", callback_data="admin_refresh")]
@@ -90,6 +92,15 @@ def get_list_keyboard(type_name):
         [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]
     ])
     return markup
+
+@dp.message(Command("cancel"))
+async def cancel_handler(message: types.Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state is None:
+        return
+    await state.clear()
+    sent = await message.answer("✅ Действие отменено.")
+    asyncio.create_task(delete_messages_later(message, sent, 30))
 
 @dp.message(Command("admin"))
 async def admin_panel(message: types.Message, state: FSMContext):
@@ -158,6 +169,32 @@ async def admin_callbacks(call: CallbackQuery, state: FSMContext):
         await state.update_data(devlogs_filter_user=None)
         await call.answer("Фильтр сброшен!", show_alert=True)
         await render_devlogs_page(call.message, 0, state)
+    elif action == "wisplogs":
+        await state.update_data(wisplogs_filter_user=None)
+        await render_wisplogs_page(call.message, 0, state)
+        await call.answer()
+    elif action.startswith("wisplogsPage:"):
+        page = int(action.split(":")[1])
+        await render_wisplogs_page(call.message, page, state)
+        await call.answer()
+    elif action == "wisplogs_clear":
+        headers = {"x-bot-token": API_SECRET}
+        async with aiohttp.ClientSession() as session:
+            async with session.delete(f"{API_BASE}/api/admin/wisp_logs", headers=headers) as del_resp:
+                del_status = del_resp.status
+                del_text = await del_resp.text()
+                print(f"DEBUG: DELETE /api/admin/wisp_logs returned {del_status} - {del_text}")
+        await call.answer("Логи очищены!", show_alert=True)
+        await render_wisplogs_page(call.message, 0, state)
+    elif action == "wisplogs_filter":
+        await state.set_state(AdminStates.waiting_for_wisplogs_user)
+        sent = await call.message.answer("🔍 Введите логин или TG ID для фильтрации логов:")
+        asyncio.create_task(delete_messages_later(sent, delay=300))
+        await call.answer()
+    elif action == "wisplogs_clearfilter":
+        await state.update_data(wisplogs_filter_user=None)
+        await call.answer("Фильтр сброшен!", show_alert=True)
+        await render_wisplogs_page(call.message, 0, state)
 
 async def api_manage_whitelist(action, type_name, value, name=None):
     headers = {"x-bot-token": API_SECRET, "Content-Type": "application/json"}
@@ -313,12 +350,18 @@ async def render_devlogs_page(message: types.Message, page: int, state: FSMConte
                         browser_type = ev.get("browser_type", "Unknown")
                         username = ev.get("username")
                         
+                        from datetime import datetime, timedelta
                         raw_date = ev.get("created_at", "")
-                        if "T" in raw_date:
-                            parts = raw_date.split("T")
-                            created_at = parts[0] + " " + parts[1][:5]
-                        else:
-                            created_at = str(raw_date)[:16]
+                        try:
+                            dt = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+                            dt_msk = dt + timedelta(hours=3)
+                            created_at = dt_msk.strftime("%d.%m.%Y %H:%M:%S")
+                        except Exception:
+                            if "T" in raw_date:
+                                parts = raw_date.split("T")
+                                created_at = parts[0] + " " + parts[1][:5]
+                            else:
+                                created_at = str(raw_date)[:16]
                         
                         type_emoji = "🟢" if event_type == "OPEN" else "🔴" if event_type == "CLOSE" else "🔑"
                         browser_str = "🕵️ Скрытый" if browser_type == "hidden" else "🌐 Обычный"
@@ -368,6 +411,109 @@ async def render_devlogs_page(message: types.Message, page: int, state: FSMConte
         else:
             await message.answer(err_msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]))
 
+async def render_wisplogs_page(message: types.Message, page: int, state: FSMContext = None, edit_msg: bool = True):
+    headers = {"x-bot-token": API_SECRET}
+    filter_user = None
+    if state:
+        data = await state.get_data()
+        filter_user = data.get("wisplogs_filter_user")
+        
+    url = f"{API_BASE}/api/admin/wisp_logs"
+    per_page = 10
+    params = {"page": page, "limit": per_page}
+    if filter_user:
+        params["username"] = filter_user
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, params=params, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    events = data.get("events", [])
+                    total = data.get("total", 0)
+                    
+                    filter_str = f" (Поиск: `{filter_user}`)" if filter_user else ""
+                    
+                    if not events:
+                        text = f"🌐 *Логи Wisp*{filter_str}\n\nПусто."
+                        kb_btns = [
+                            [InlineKeyboardButton(text="🔍 Фильтр", callback_data="admin_wisplogs_filter")],
+                        ]
+                        if filter_user:
+                            kb_btns.append([InlineKeyboardButton(text="❌ Сбросить фильтр", callback_data="admin_wisplogs_clearfilter")])
+                        kb_btns.append([InlineKeyboardButton(text="🔙 Назад в меню", callback_data="admin_back")])
+                        if edit_msg:
+                            return await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_btns))
+                        else:
+                            return await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_btns))
+                        
+                    total_pages = max(1, (total + per_page - 1) // per_page)
+                    
+                    text = f"🌐 *Логи Wisp*{filter_str}\nСтраница: {page+1}/{total_pages} (Всего: {total})\n\n"
+                    for ev in events:
+                        target_host = ev.get("target_host", "Unknown")
+                        target_port = ev.get("target_port", "Unknown")
+                        username = ev.get("username")
+                        telegram_id = ev.get("telegram_id", "Unknown")
+                        
+                        from datetime import datetime, timedelta
+                        raw_date = ev.get("created_at", "")
+                        try:
+                            dt = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+                            dt_msk = dt + timedelta(hours=3)
+                            created_at = dt_msk.strftime("%d.%m.%Y %H:%M:%S")
+                        except Exception:
+                            if "T" in raw_date:
+                                parts = raw_date.split("T")
+                                created_at = parts[0] + " " + parts[1][:5]
+                            else:
+                                created_at = str(raw_date)[:16]
+                        
+                        user_str = f"{username} / {telegram_id}" if username else f"{telegram_id}"
+                        
+                        text += f"🌐 `{target_host}:{target_port}`\n"
+                        text += f"   👤 {user_str}\n"
+                        text += f"   🕒 {created_at}\n\n"
+                        
+                    kb = []
+                    nav_row = []
+                    if page > 0:
+                        nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"admin_wisplogsPage:{page-1}"))
+                    if page < total_pages - 1:
+                        nav_row.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"admin_wisplogsPage:{page+1}"))
+                    
+                    if nav_row: kb.append(nav_row)
+                    
+                    ctrl_row = [InlineKeyboardButton(text="🔍 Фильтр", callback_data="admin_wisplogs_filter")]
+                    if filter_user:
+                        ctrl_row.append(InlineKeyboardButton(text="❌ Сбросить", callback_data="admin_wisplogs_clearfilter"))
+                    kb.append(ctrl_row)
+                    
+                    kb.append([InlineKeyboardButton(text="🗑 Очистить логи", callback_data="admin_wisplogs_clear")])
+                    kb.append([InlineKeyboardButton(text="🔙 Назад в меню", callback_data="admin_back")])
+                    
+                    from datetime import datetime
+                    text += f"\n\n🕒 Последнее обновление: {datetime.now().strftime('%H:%M:%S')}"
+                    
+                    if edit_msg:
+                        await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+                    else:
+                        await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+                else:
+                    err_text = await resp.text()
+                    print(f"DEBUG: /api/admin/wisp_logs returned {resp.status} - {err_text}")
+                    err_msg = f"❌ Ошибка сервера при получении логов.\nСтатус: {resp.status}\nТекст: {err_text[:100]}"
+                    if edit_msg:
+                        await message.edit_text(err_msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]))
+                    else:
+                        await message.answer(err_msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]))
+    except Exception as e:
+        print("API error wisp logs:", e)
+        err_msg = "❌ Ошибка сети при получении логов."
+        if edit_msg:
+            await message.edit_text(err_msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]))
+        else:
+            await message.answer(err_msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]))
 
 
 @dp.callback_query(F.data.startswith("u_"))
@@ -487,6 +633,16 @@ async def process_devlogs_user(message: types.Message, state: FSMContext):
     
     # Render immediately
     await render_devlogs_page(message, 0, state, edit_msg=False)
+    
+    await state.set_state(None)
+
+@dp.message(AdminStates.waiting_for_wisplogs_user)
+async def process_wisplogs_user(message: types.Message, state: FSMContext):
+    username = message.text.strip()
+    await state.update_data(wisplogs_filter_user=username)
+    
+    # Render immediately
+    await render_wisplogs_page(message, 0, state, edit_msg=False)
     
     await state.set_state(None)
 
