@@ -72,12 +72,15 @@ class AdminStates(StatesGroup):
     waiting_for_user_new_name = State()
     waiting_for_devlogs_user = State()
     waiting_for_wisplogs_user = State()
+    waiting_for_wispstats_user = State()
+    waiting_for_wispstats_period_custom = State()
 
 def get_admin_keyboard():
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🧑‍💻 Зарегистрированные юзеры", callback_data="admin_dbusers")],
         [InlineKeyboardButton(text="📜 Логи устройств", callback_data="admin_devlogs")],
         [InlineKeyboardButton(text="🌐 Логи Wisp", callback_data="admin_wisplogs")],
+        [InlineKeyboardButton(text="📊 Статистика Wisp", callback_data="admin_wispstats")],
         [InlineKeyboardButton(text="🌐 Управление IP", callback_data="admin_ip")],
         [InlineKeyboardButton(text="👥 Управление TG ID", callback_data="admin_tg")],
         [InlineKeyboardButton(text="🔄 Обновить кэш с сервера", callback_data="admin_refresh")]
@@ -162,7 +165,7 @@ async def admin_callbacks(call: CallbackQuery, state: FSMContext):
         await render_devlogs_page(call.message, 0, state)
     elif action == "devlogs_filter":
         await state.set_state(AdminStates.waiting_for_devlogs_user)
-        sent = await call.message.answer("🔍 Введите логин пользователя для фильтрации логов:")
+        sent = await call.message.answer("🔍 Введите логин пользователя для фильтрации логов:\n\n(Для отмены введите /cancel)")
         asyncio.create_task(delete_messages_later(sent, delay=300))
         await call.answer()
     elif action == "devlogs_clearfilter":
@@ -188,13 +191,56 @@ async def admin_callbacks(call: CallbackQuery, state: FSMContext):
         await render_wisplogs_page(call.message, 0, state)
     elif action == "wisplogs_filter":
         await state.set_state(AdminStates.waiting_for_wisplogs_user)
-        sent = await call.message.answer("🔍 Введите логин или TG ID для фильтрации логов:")
+        sent = await call.message.answer("🔍 Введите логин, TG ID или домен для фильтрации логов:\n\n(Для отмены введите /cancel)")
         asyncio.create_task(delete_messages_later(sent, delay=300))
         await call.answer()
     elif action == "wisplogs_clearfilter":
         await state.update_data(wisplogs_filter_user=None)
         await call.answer("Фильтр сброшен!", show_alert=True)
         await render_wisplogs_page(call.message, 0, state)
+    elif action == "wispstats":
+        await state.set_state(AdminStates.waiting_for_wispstats_user)
+        sent = await call.message.answer("📊 Введите логин или TG ID пользователя для сбора статистики (или отправьте `все` для общей статистики):\n\n(Для отмены введите /cancel)")
+        asyncio.create_task(delete_messages_later(sent, delay=300))
+        await call.answer()
+    elif action.startswith("wispstats_period:"):
+        period = action.split(":")[1]
+        data = await state.get_data()
+        
+        if period == "custom":
+            await state.set_state(AdminStates.waiting_for_wispstats_period_custom)
+            sent = await call.message.answer("📅 Введите период в формате:\n`ДД.ММ.ГГГГ ЧЧ:ММ - ДД.ММ.ГГГГ ЧЧ:ММ`\n\nПример:\n`25.08.2026 18:00 - 25.08.2026 19:00`\n\n(Для отмены введите /cancel)", parse_mode="Markdown")
+            asyncio.create_task(delete_messages_later(sent, delay=300))
+            await call.answer()
+            return
+
+        from datetime import datetime, timedelta, timezone
+        now_utc = datetime.now(timezone.utc)
+        now_msk = now_utc + timedelta(hours=3)
+        
+        start_date = None
+        end_date = None
+        
+        if period == "today":
+            start_msk = now_msk.replace(hour=0, minute=0, second=0, microsecond=0)
+            start_utc = start_msk - timedelta(hours=3)
+            end_utc = start_utc + timedelta(days=1)
+            start_date = start_utc.isoformat().replace("+00:00", "Z")
+            end_date = end_utc.isoformat().replace("+00:00", "Z")
+        elif period == "yesterday":
+            start_msk = now_msk.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+            start_utc = start_msk - timedelta(hours=3)
+            end_utc = start_utc + timedelta(days=1)
+            start_date = start_utc.isoformat().replace("+00:00", "Z")
+            end_date = end_utc.isoformat().replace("+00:00", "Z")
+        
+        await state.update_data(wispstats_start=start_date, wispstats_end=end_date, wispstats_period_name=period)
+        await render_wispstats_page(call.message, 0, state)
+        await call.answer()
+    elif action.startswith("wispstatsPage:"):
+        page = int(action.split(":")[1])
+        await render_wispstats_page(call.message, page, state)
+        await call.answer()
 
 async def api_manage_whitelist(action, type_name, value, name=None):
     headers = {"x-bot-token": API_SECRET, "Content-Type": "application/json"}
@@ -515,6 +561,98 @@ async def render_wisplogs_page(message: types.Message, page: int, state: FSMCont
         else:
             await message.answer(err_msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]))
 
+async def render_wispstats_page(message: types.Message, page: int, state: FSMContext = None, edit_msg: bool = True):
+    headers = {"x-bot-token": API_SECRET}
+    filter_user = None
+    start_date = None
+    end_date = None
+    period_name = "all"
+    
+    if state:
+        data = await state.get_data()
+        filter_user = data.get("wispstats_user")
+        start_date = data.get("wispstats_start")
+        end_date = data.get("wispstats_end")
+        period_name = data.get("wispstats_period_name", "all")
+        
+    url = f"{API_BASE}/api/admin/wisp_stats"
+    per_page = 10
+    params = {"page": page, "limit": per_page}
+    
+    if filter_user and filter_user.lower() != "все":
+        params["username"] = filter_user
+    if start_date:
+        params["start_date"] = start_date
+    if end_date:
+        params["end_date"] = end_date
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, params=params, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    stats = data.get("stats", [])
+                    total_hosts = data.get("total_hosts", 0)
+                    total_requests = data.get("total_requests", 0)
+                    
+                    period_str = "За всё время"
+                    if period_name == "today":
+                        period_str = "Сегодня"
+                    elif period_name == "yesterday":
+                        period_str = "Вчера"
+                    elif period_name == "custom":
+                        period_str = "Свой промежуток"
+                        
+                    user_str = filter_user if (filter_user and filter_user.lower() != "все") else "Все пользователи"
+                    
+                    text = f"📊 *Статистика Wisp*\n👤 Пользователь: `{user_str}`\n📅 Период: `{period_str}`\n\n"
+                    text += f"Всего запросов: `{total_requests}`\nУникальных сайтов: `{total_hosts}`\n\n"
+                    
+                    if not stats:
+                        text += "Нет данных за выбранный период."
+                    else:
+                        total_pages = max(1, (total_hosts + per_page - 1) // per_page)
+                        for s in stats:
+                            host = s.get("target_host", "Unknown")
+                            count = s.get("req_count", 0)
+                            text += f"🌐 `{host}` — {count} запроса(ов)\n"
+                        
+                        text += f"\nСтраница {page+1}/{total_pages}"
+                        
+                    kb = []
+                    nav_row = []
+                    
+                    # For pagination we use total_hosts
+                    total_pages = max(1, (total_hosts + per_page - 1) // per_page)
+                    if page > 0:
+                        nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"admin_wispstatsPage:{page-1}"))
+                    if page < total_pages - 1:
+                        nav_row.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"admin_wispstatsPage:{page+1}"))
+                    
+                    if nav_row: kb.append(nav_row)
+                    
+                    kb.append([InlineKeyboardButton(text="🔙 К выбору пользователя", callback_data="admin_wispstats")])
+                    kb.append([InlineKeyboardButton(text="🔙 Назад в меню", callback_data="admin_back")])
+                    
+                    if edit_msg:
+                        await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+                    else:
+                        await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+                else:
+                    err_text = await resp.text()
+                    err_msg = f"❌ Ошибка сервера.\nСтатус: {resp.status}"
+                    if edit_msg:
+                        await message.edit_text(err_msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]))
+                    else:
+                        await message.answer(err_msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]))
+    except Exception as e:
+        print("API error wisp stats:", e)
+        err_msg = "❌ Ошибка сети при получении статистики."
+        if edit_msg:
+            await message.edit_text(err_msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]))
+        else:
+            await message.answer(err_msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]))
+
 
 @dp.callback_query(F.data.startswith("u_"))
 async def handle_dbusers_callbacks(call: CallbackQuery, state: FSMContext):
@@ -633,7 +771,7 @@ async def process_devlogs_user(message: types.Message, state: FSMContext):
     
     # Render immediately
     await render_devlogs_page(message, 0, state, edit_msg=False)
-    
+    asyncio.create_task(delete_messages_later(message, delay=300))
     await state.set_state(None)
 
 @dp.message(AdminStates.waiting_for_wisplogs_user)
@@ -643,8 +781,50 @@ async def process_wisplogs_user(message: types.Message, state: FSMContext):
     
     # Render immediately
     await render_wisplogs_page(message, 0, state, edit_msg=False)
-    
+    asyncio.create_task(delete_messages_later(message, delay=300))
     await state.set_state(None)
+
+@dp.message(AdminStates.waiting_for_wispstats_user)
+async def process_wispstats_user(message: types.Message, state: FSMContext):
+    username = message.text.strip()
+    await state.update_data(wispstats_user=username)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Сегодня", callback_data="admin_wispstats_period:today")],
+        [InlineKeyboardButton(text="Вчера", callback_data="admin_wispstats_period:yesterday")],
+        [InlineKeyboardButton(text="За 3 дня (Всё время)", callback_data="admin_wispstats_period:all")],
+        [InlineKeyboardButton(text="Свой промежуток", callback_data="admin_wispstats_period:custom")],
+        [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_back")]
+    ])
+    await message.answer(f"Пользователь: `{username}`\nВыберите период для статистики:", reply_markup=kb)
+    asyncio.create_task(delete_messages_later(message, delay=300))
+    await state.set_state(None)
+
+@dp.message(AdminStates.waiting_for_wispstats_period_custom)
+async def process_wispstats_custom(message: types.Message, state: FSMContext):
+    text = message.text.strip()
+    try:
+        parts = text.split("-")
+        if len(parts) != 2: raise ValueError("No dash")
+        start_str = parts[0].strip()
+        end_str = parts[1].strip()
+        
+        from datetime import datetime, timedelta, timezone
+        start_msk = datetime.strptime(start_str, "%d.%m.%Y %H:%M")
+        end_msk = datetime.strptime(end_str, "%d.%m.%Y %H:%M")
+        
+        start_utc = start_msk - timedelta(hours=3)
+        end_utc = end_msk - timedelta(hours=3)
+        
+        start_iso = start_utc.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+        end_iso = end_utc.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+        
+        await state.update_data(wispstats_start=start_iso, wispstats_end=end_iso, wispstats_period_name="custom")
+        await render_wispstats_page(message, 0, state, edit_msg=False)
+        asyncio.create_task(delete_messages_later(message, delay=300))
+        await state.set_state(None)
+    except Exception as e:
+        await message.answer("❌ Неверный формат даты.\nОжидаемый формат: `ДД.ММ.ГГГГ ЧЧ:ММ - ДД.ММ.ГГГГ ЧЧ:ММ`\n\nПопробуйте ввести еще раз:", parse_mode="Markdown")
 
 @dp.callback_query(F.data.startswith("toggle_"))
 async def toggle_all_callback(call: CallbackQuery):

@@ -178,7 +178,7 @@ const BaseTCPSocket = dummyConn.TCPSocket;
 
 internalWispServer.on("upgrade", (req, socket, head) => {
 	const telegramId = req.headers["x-telegram-id"];
-	
+
 	// Динамически создаем класс-обертку, не ломая прототипы
 	class LoggedTCPSocket extends BaseTCPSocket {
 		constructor(hostname, port) {
@@ -1032,7 +1032,7 @@ fastify.get("/api/admin/wisp_logs", { preHandler: verifyBotToken }, async (req, 
 		const limit = parseInt(req.query.limit) || 10;
 		const username = req.query.username;
 		const offset = page * limit;
-		
+
 		let query = `
 			SELECT w.id, w.telegram_id, w.target_host, w.target_port, w.created_at, u.username
 			FROM wisp_access_logs w
@@ -1043,14 +1043,14 @@ fastify.get("/api/admin/wisp_logs", { preHandler: verifyBotToken }, async (req, 
 			FROM wisp_access_logs w
 			LEFT JOIN users u ON w.telegram_id = u.telegram_id
 		`;
-		
+
 		let params = [];
 		let whereClause = "";
 		if (username) {
 			whereClause = ` WHERE u.username ILIKE $1 OR w.telegram_id ILIKE $1 OR w.target_host ILIKE $1`;
 			params.push(`%${username}%`);
 		}
-		
+
 		query += whereClause + ` ORDER BY w.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
 		countQuery += whereClause;
 
@@ -1073,6 +1073,69 @@ fastify.delete("/api/admin/wisp_logs", { preHandler: verifyBotToken }, async (re
 	} catch (e) {
 		console.error("[ADMIN WISP LOGS ERROR]", e);
 		return reply.code(500).send({ error: "Error deleting wisp logs" });
+	}
+});
+
+fastify.get("/api/admin/wisp_stats", { preHandler: verifyBotToken }, async (req, reply) => {
+	try {
+		const page = parseInt(req.query.page) || 0;
+		const limit = parseInt(req.query.limit) || 10;
+		const username = req.query.username;
+		const startDate = req.query.start_date;
+		const endDate = req.query.end_date;
+		const offset = page * limit;
+
+		let whereClause = " WHERE 1=1";
+		let params = [];
+		let paramIndex = 1;
+
+		if (username) {
+			whereClause += ` AND (u.username ILIKE $${paramIndex} OR w.telegram_id ILIKE $${paramIndex})`;
+			params.push(`%${username}%`);
+			paramIndex++;
+		}
+		if (startDate) {
+			whereClause += ` AND w.created_at >= $${paramIndex}`;
+			params.push(startDate);
+			paramIndex++;
+		}
+		if (endDate) {
+			whereClause += ` AND w.created_at <= $${paramIndex}`;
+			params.push(endDate);
+			paramIndex++;
+		}
+
+		const query = `
+			SELECT w.target_host, COUNT(*) as req_count
+			FROM wisp_access_logs w
+			LEFT JOIN users u ON w.telegram_id = u.telegram_id
+			${whereClause}
+			GROUP BY w.target_host
+			ORDER BY req_count DESC
+			LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+		`;
+
+		const countQuery = `
+			SELECT COUNT(DISTINCT w.target_host) as total_hosts, COUNT(*) as total_requests
+			FROM wisp_access_logs w
+			LEFT JOIN users u ON w.telegram_id = u.telegram_id
+			${whereClause}
+		`;
+
+		const [result, countResult] = await Promise.all([
+			db.query(query, [...params, limit, offset]),
+			db.query(countQuery, params)
+		]);
+
+		return {
+			status: "ok",
+			stats: result.rows,
+			total_hosts: parseInt(countResult.rows[0].total_hosts, 10),
+			total_requests: parseInt(countResult.rows[0].total_requests, 10)
+		};
+	} catch (e) {
+		console.error("[ADMIN WISP STATS ERROR]", e);
+		return reply.code(500).send({ error: "Error fetching wisp stats" });
 	}
 });
 
