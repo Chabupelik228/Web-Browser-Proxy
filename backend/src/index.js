@@ -6,7 +6,6 @@ import { fileURLToPath } from "url";
 import { server as wisp, logging } from "@mercuryworkshop/wisp-js/server";
 import Fastify from "fastify";
 import fastifyCors from "@fastify/cors";
-import fastifyStatic from "@fastify/static";
 import pg from "pg";
 import { createClient } from "redis";
 import jwt from "jsonwebtoken";
@@ -14,9 +13,6 @@ import crypto from "node:crypto";
 import ipRangeCheck from "ip-range-check";
 import { WebSocketServer, WebSocket } from "ws";
 import { LogService } from "./services/LogService.js";
-
-const publicPath = fileURLToPath(new URL("../public/", import.meta.url));
-
 // Хранилище активных Wisp сокетов: userId -> Set(socket)
 const activeWispSockets = new Map();
 
@@ -115,6 +111,15 @@ try {
 	`);
 	await client.query(`CREATE INDEX IF NOT EXISTS idx_wisp_logs_created_at ON wisp_access_logs(created_at)`);
 	await client.query(`CREATE INDEX IF NOT EXISTS idx_wisp_logs_telegram_id ON wisp_access_logs(telegram_id)`);
+
+	// Таблица имен для HWID
+	await client.query(`
+		CREATE TABLE IF NOT EXISTS hwid_names (
+			hwid VARCHAR(255) PRIMARY KEY,
+			name VARCHAR(255) NOT NULL,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+		)
+	`);
 } finally {
 	client.release();
 }
@@ -958,11 +963,39 @@ const verifyBotToken = (req, reply, done) => {
 	done();
 };
 
+// Назначение имени для HWID
+fastify.post("/api/admin/hwid_name", { preHandler: verifyBotToken }, async (req, reply) => {
+	const { hwid, name } = req.body || {};
+	if (!hwid || !name) return reply.code(400).send({ error: "hwid and name required" });
+	try {
+		await db.query(`
+			INSERT INTO hwid_names (hwid, name) VALUES ($1, $2)
+			ON CONFLICT (hwid) DO UPDATE SET name = $2
+		`, [hwid, name]);
+		return { status: "ok" };
+	} catch (e) {
+		console.error("[ADMIN] Error saving hwid name", e);
+		return reply.code(500).send({ error: "DB error" });
+	}
+});
+
 // Статистика трафика пользователей (для TG бота)
 fastify.get("/api/admin/traffic", { preHandler: verifyBotToken }, async (req, reply) => {
 	try {
 		const result = await db.query("SELECT id, username, is_active, telegram_id FROM users ORDER BY id ASC");
 		const users = [];
+
+		const lastHwidsResult = await db.query(`
+			SELECT DISTINCT ON (d.user_id) d.user_id, d.device_id as hwid, h.name as hwid_name
+			FROM device_events d
+			LEFT JOIN hwid_names h ON d.device_id = h.hwid
+			WHERE d.user_id IS NOT NULL
+			ORDER BY d.user_id, d.created_at DESC
+		`);
+		const hwidMap = {};
+		for (const row of lastHwidsResult.rows) {
+			hwidMap[row.user_id] = { hwid: row.hwid, name: row.hwid_name };
+		}
 
 		for (const u of result.rows) {
 			const totalRaw = await redis.get(`traffic:${u.id}:total`).catch(() => null);
@@ -983,6 +1016,8 @@ fastify.get("/api/admin/traffic", { preHandler: verifyBotToken }, async (req, re
 				domain: domainInfo ? domainInfo.domain : null,
 				sessionBytes,
 				totalBytes,
+				hwid: hwidMap[u.id] ? hwidMap[u.id].hwid : null,
+				hwid_name: hwidMap[u.id] ? hwidMap[u.id].name : null,
 			});
 		}
 
@@ -997,9 +1032,10 @@ fastify.get("/api/admin/device_events", { preHandler: verifyBotToken }, async (r
 	try {
 		const { username } = req.query;
 		let query = `
-			SELECT d.id, d.device_id, d.event_type, d.browser_type, d.created_at, u.username
+			SELECT d.id, d.device_id, d.event_type, d.browser_type, d.created_at, u.username, h.name as device_name
 			FROM device_events d
 			LEFT JOIN users u ON d.user_id = u.id
+			LEFT JOIN hwid_names h ON d.device_id = h.hwid
 		`;
 		let params = [];
 		if (username) {
@@ -1264,15 +1300,13 @@ fastify.delete("/api/admin/users/:id", { preHandler: verifyBotToken }, async (re
 });
 
 // ----------------------------------------------------
-// СТАТИЧЕСКИЕ МАРШРУТЫ ДЛЯ СОВМЕСТИМОСТИ
+// МАСКИРОВКА НЕИЗВЕСТНЫХ МАРШРУТОВ (DROP CONNECTION)
 // ----------------------------------------------------
-fastify.register(fastifyStatic, {
-	root: publicPath,
-	decorateReply: true,
-});
-
-fastify.setNotFoundHandler((req, reply) => {
-	return reply.code(404).type("text/html").sendFile("404.html");
+fastify.setNotFoundHandler(async (req, reply) => {
+	// Бесконечное ожидание (Tarpit)
+	// Не отправляем ответ и не закрываем сокет.
+	// Запрос просто повиснет в воздухе.
+	await new Promise(() => { });
 });
 
 fastify.server.on("listening", () => {

@@ -90,7 +90,7 @@
 - **Core & Tunneling:** Rust, Tauri v2, Tokio, Tungstenite (WebSocket), Byteorder.
 - **Web Engine:** Microsoft Edge WebView2.
 - **Frontend (UI):** Vue 3, Vite, Pinia (State Management), Tailwind CSS / Vanilla CSS.
-- **Backend:** Node.js, Fastify, Wisp-JS, Argon2 (хэширование паролей), JWT.
+- **Backend:** Node.js, Fastify, Wisp-JS, Argon2 (хэширование паролей)В, JWT.
 - **Databases:** PostgreSQL (пользователи), Redis (OTP, Single-Session Lock).
 - **Bots:** Telegraf / Python Telebot (OTP-коды).
 

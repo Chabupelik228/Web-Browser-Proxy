@@ -74,6 +74,9 @@ class AdminStates(StatesGroup):
     waiting_for_wisplogs_user = State()
     waiting_for_wispstats_user = State()
     waiting_for_wispstats_period_custom = State()
+    waiting_for_hwid_name = State()
+    waiting_for_global_hwid = State()
+    waiting_for_global_hwid_name = State()
 
 def get_admin_keyboard():
     markup = InlineKeyboardMarkup(inline_keyboard=[
@@ -83,6 +86,7 @@ def get_admin_keyboard():
         [InlineKeyboardButton(text="📊 Статистика Wisp", callback_data="admin_wispstats")],
         [InlineKeyboardButton(text="🌐 Управление IP", callback_data="admin_ip")],
         [InlineKeyboardButton(text="👥 Управление TG ID", callback_data="admin_tg")],
+        [InlineKeyboardButton(text="💻 Назвать ПК", callback_data="admin_name_pc")],
         [InlineKeyboardButton(text="🔄 Обновить кэш с сервера", callback_data="admin_refresh")]
     ])
     return markup
@@ -141,6 +145,11 @@ async def admin_callbacks(call: CallbackQuery, state: FSMContext):
     elif action == "refresh":
         await fetch_whitelists()
         await call.answer("Кэш обновлен!", show_alert=True)
+    elif action == "name_pc":
+        await state.set_state(AdminStates.waiting_for_global_hwid)
+        sent = await call.message.answer("💻 Введите HWID компьютера, которому хотите назначить имя:\n\n(Для отмены введите /cancel)")
+        asyncio.create_task(delete_messages_later(sent, delay=300))
+        await call.answer()
     elif action in ["ip", "tg"]:
         await render_admin_list(call.message, action)
     elif action == "dbusers":
@@ -260,6 +269,17 @@ async def api_manage_whitelist(action, type_name, value, name=None):
         print("API error:", e)
         return False
     return False
+
+async def api_manage_hwid_name(hwid, name):
+    headers = {"x-bot-token": API_SECRET, "Content-Type": "application/json"}
+    payload = {"hwid": hwid, "name": name}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"{API_BASE}/api/admin/hwid_name", json=payload, headers=headers) as resp:
+                return resp.status == 200
+    except Exception as e:
+        print("API error hwid_name:", e)
+        return False
 
 async def api_manage_users(action, user_id=None, name=None):
     headers = {"x-bot-token": API_SECRET}
@@ -392,6 +412,11 @@ async def render_devlogs_page(message: types.Message, page: int, state: FSMConte
                     text = f"📜 *Логи устройств*{filter_str}\nСтраница: {page+1}/{total_pages}\n\n"
                     for ev in page_events:
                         device_id = ev.get("device_id", "Unknown")
+                        device_name = ev.get("device_name")
+                        if device_name:
+                            device_id = f"💻 {device_name}"
+                        else:
+                            device_id = f"`{device_id}`"
                         event_type = ev.get("event_type", "Unknown").upper()
                         browser_type = ev.get("browser_type", "Unknown")
                         username = ev.get("username")
@@ -413,7 +438,7 @@ async def render_devlogs_page(message: types.Message, page: int, state: FSMConte
                         browser_str = "🕵️ Скрытый" if browser_type == "hidden" else "🌐 Обычный"
                         user_str = f"👤 {username}" if username else "👤 Без логина"
                         
-                        text += f"{type_emoji} `{device_id}`\n"
+                        text += f"{type_emoji} {device_id}\n"
                         text += f"   {browser_str} | {user_str} | {event_type} | 🕒 {created_at}\n\n"
                         
                     kb = []
@@ -681,11 +706,21 @@ async def handle_dbusers_callbacks(call: CallbackQuery, state: FSMContext):
         status_emoji = "🟢" if connected else "🔴"
         status_text = "Онлайн" if connected else "Офлайн"
         
+        hwid = t.get("hwid")
+        hwid_name = t.get("hwid_name")
+        hw_str = "Нет данных"
+        if hwid:
+            if hwid_name:
+                hw_str = f"{hwid_name}"
+            else:
+                hw_str = f"`{hwid}`"
+        
         text = (
             f"👤 *Профиль пользователя*\n\n"
             f"*ID в базе:* `{u['id']}`\n"
             f"*TG ID:* `{u.get('telegram_id', 'Не привязан')}`\n"
-            f"*Имя/Логин:* {u['username']}\n\n"
+            f"*Имя/Логин:* {u['username']}\n"
+            f"*ПК:* {hw_str}\n\n"
             f"{status_emoji} *Статус:* {status_text}\n"
         )
         
@@ -701,6 +736,7 @@ async def handle_dbusers_callbacks(call: CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="🔍 Найти устройство", callback_data=f"u_cmd:find:{u['id']}")],
             [InlineKeyboardButton(text="🚪 Обычный режим", callback_data=f"u_cmd:norm:{u['id']}")],
             [InlineKeyboardButton(text="✒️ Изменить Имя", callback_data=f"u_edit:{u['id']}")],
+            [InlineKeyboardButton(text="💻 Назвать ПК", callback_data=f"u_hwname:{u['id']}")],
             [InlineKeyboardButton(text="🗑 Удалить браузер", callback_data=f"u_delapp:{u['id']}")],
             [InlineKeyboardButton(text="❌ Удалить", callback_data=f"u_del:{u['id']}")],
             [InlineKeyboardButton(text="🔙 К списку", callback_data="admin_dbusers")]
@@ -746,9 +782,59 @@ async def handle_dbusers_callbacks(call: CallbackQuery, state: FSMContext):
         sent = await call.message.answer("✏️ Введите новое имя для этого пользователя:")
         asyncio.create_task(delete_messages_later(sent, delay=300))
         await call.answer()
+    elif action == "u_hwname":
+        traffic_data = await api_fetch_traffic()
+        t = traffic_data.get(val, {})
+        hwid = t.get("hwid")
+        if not hwid:
+            return await call.answer("Нет известного HWID для этого пользователя", show_alert=True)
+            
+        await state.update_data(hwid_to_name=hwid)
+        await state.set_state(AdminStates.waiting_for_hwid_name)
+        
+        sent = await call.message.answer(f"💻 Введите новое название для ПК с HWID:\n`{hwid}`")
+        asyncio.create_task(delete_messages_later(sent, delay=300))
+        await call.answer()
     
     try: await call.answer()
     except: pass
+
+@dp.message(AdminStates.waiting_for_hwid_name)
+async def process_hwid_name(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    hwid = data.get("hwid_to_name")
+    new_name = message.text.strip()
+    
+    success = await api_manage_hwid_name(hwid, new_name)
+    if success:
+        sent = await message.answer(f"✅ Название ПК успешно сохранено: '{new_name}' для HWID: `{hwid}`")
+    else:
+        sent = await message.answer("❌ Ошибка сервера при сохранении названия ПК.")
+    asyncio.create_task(delete_messages_later(message, sent, 300))
+    await state.clear()
+
+@dp.message(AdminStates.waiting_for_global_hwid)
+async def process_global_hwid(message: types.Message, state: FSMContext):
+    hwid = message.text.strip()
+    await state.update_data(global_hwid_to_name=hwid)
+    await state.set_state(AdminStates.waiting_for_global_hwid_name)
+    
+    sent = await message.answer(f"💻 Введите название для ПК с HWID:\n`{hwid}`\n\n(Для отмены введите /cancel)")
+    asyncio.create_task(delete_messages_later(message, sent, 300))
+
+@dp.message(AdminStates.waiting_for_global_hwid_name)
+async def process_global_hwid_name(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    hwid = data.get("global_hwid_to_name")
+    new_name = message.text.strip()
+    
+    success = await api_manage_hwid_name(hwid, new_name)
+    if success:
+        sent = await message.answer(f"✅ Название ПК успешно сохранено: '{new_name}' для HWID: `{hwid}`")
+    else:
+        sent = await message.answer("❌ Ошибка сервера при сохранении названия ПК.")
+    asyncio.create_task(delete_messages_later(message, sent, 300))
+    await state.clear()
 
 @dp.message(AdminStates.waiting_for_user_new_name)
 async def process_edit_user_name(message: types.Message, state: FSMContext):
